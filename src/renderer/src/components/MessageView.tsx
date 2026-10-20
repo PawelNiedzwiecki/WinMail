@@ -13,9 +13,11 @@ import {
   X,
   Layers
 } from 'lucide-react'
+import { AnimatePresence } from 'motion/react'
 import { useEffect, useState, type ReactNode } from 'react'
 import type { Address, MessageAppearance, MessageDetail, MessageSummary, Unsubscribe } from '@shared/types'
 import { api } from '../api'
+import { Collapse } from './Collapse'
 import { ContextMenu, type MenuItem } from './ContextMenu'
 import { formatFullDate, formatSize, initials } from '../format'
 import { usePrefersDark } from '../usePrefersDark'
@@ -23,6 +25,7 @@ import { canReplyAll } from '../compose/actions'
 import type { ReplyMode } from '../compose/sessions'
 import { HtmlBody, hasRemoteContent } from './HtmlBody'
 import { InlineReply } from './compose/InlineReply'
+import { UnsubscribeDialog } from './UnsubscribeDialog'
 
 interface Props {
   summary: MessageSummary | null
@@ -76,6 +79,9 @@ export function MessageView({
   const appDark = usePrefersDark()
   const dark = messageAppearance === 'app' ? appDark : messageAppearance === 'dark'
   const [more, setMore] = useState<{ x: number; y: number } | null>(null)
+  // The list banner stays closed for the message it was dismissed (or unsubscribed) on.
+  const [listHidden, setListHidden] = useState<string | null>(null)
+  const [confirmUnsub, setConfirmUnsub] = useState(false)
 
   if (multiCount > 1) {
     return (
@@ -97,6 +103,7 @@ export function MessageView({
 
   const m = detail ?? summary
   const remote = detail?.html ? hasRemoteContent(detail.html) : false
+  const sender = m.from.name || m.from.email
 
   return (
     <section className="viewer">
@@ -151,46 +158,76 @@ export function MessageView({
         </header>
         {more && moreItems && <ContextMenu x={more.x} y={more.y} items={moreItems()} onClose={() => setMore(null)} />}
 
-        {ai && (
-          <div className="ai-summary">
-            <div className="ai-summary-head">
-              <Sparkles size={14} />
-              <span>Summary</span>
-              <button className="sq-btn" title="Close" aria-label="Close summary" onClick={onCloseSummary}>
-                <X size={13} />
-              </button>
-            </div>
-            {ai.error ? (
-              <div className="ai-summary-error">{ai.error}</div>
-            ) : ai.text === null ? (
-              <div className="ai-summary-loading">
-                <span className="spinner" /> Summarising…
+        {/* Banners grow in when they arrive or close; keyed by message so switching swaps them instantly. */}
+        <Collapse key={`ai-${summary.key}`} open={!!ai}>
+          {ai && (
+            <div className="ai-summary">
+              <div className="ai-summary-head">
+                <Sparkles size={14} />
+                <span>Summary</span>
+                <button className="sq-btn" title="Close" aria-label="Close summary" onClick={onCloseSummary}>
+                  <X size={13} />
+                </button>
               </div>
-            ) : (
-              <div className="ai-summary-text">{ai.text}</div>
-            )}
-          </div>
-        )}
+              {ai.error ? (
+                <div className="ai-summary-error">{ai.error}</div>
+              ) : ai.text === null ? (
+                <div className="ai-summary-loading">
+                  <span className="spinner" /> Summarising…
+                </div>
+              ) : (
+                <div className="ai-summary-text">{ai.text}</div>
+              )}
+            </div>
+          )}
+        </Collapse>
 
-        {detail?.unsubscribe && onUnsubscribe && (
-          <div className="remote-banner unsubscribe-banner">
-            <MailMinus size={14} />
-            <span>This message is from a mailing list.</span>
-            <button className="link-btn" onClick={() => onUnsubscribe(detail.unsubscribe!)}>
+        <Collapse key={`list-${summary.key}`} open={!!detail?.unsubscribe && !!onUnsubscribe && listHidden !== summary.key}>
+          <div className="list-banner">
+            <div className="list-banner-icon">
+              <MailMinus size={15} />
+            </div>
+            <div className="list-banner-text">
+              <strong>Mailing list</strong>
+              <span>Not interested? Stop getting emails from {sender}.</span>
+            </div>
+            <button className="list-banner-action" onClick={() => setConfirmUnsub(true)}>
               Unsubscribe
             </button>
+            <button
+              className="sq-btn list-banner-close"
+              title="Dismiss"
+              aria-label="Dismiss"
+              onClick={() => setListHidden(summary.key)}
+            >
+              <X size={13} />
+            </button>
           </div>
-        )}
+        </Collapse>
+        <AnimatePresence>
+          {confirmUnsub && detail?.unsubscribe && onUnsubscribe && (
+            <UnsubscribeDialog
+              key="unsubscribe"
+              sender={sender}
+              unsubscribe={detail.unsubscribe}
+              onClose={() => setConfirmUnsub(false)}
+              onConfirm={() => {
+                setListHidden(summary.key)
+                onUnsubscribe(detail.unsubscribe!)
+              }}
+            />
+          )}
+        </AnimatePresence>
 
-        {remote && !allowRemote && (
+        <Collapse key={`remote-${summary.key}`} open={remote && !allowRemote}>
           <div className="remote-banner">
             <ImageOff size={14} />
             <span>This message contains remote content.</span>
-            <button className="link-btn" onClick={onAllowRemote}>
-              Load Remote Content
+            <button className="btn btn-small" onClick={onAllowRemote}>
+              Load Content
             </button>
           </div>
-        )}
+        </Collapse>
 
         {error && <div className="list-error">{error}</div>}
         {!detail && !error && <MessageSkeleton />}
@@ -259,10 +296,12 @@ export function MessageView({
 /** Generic paragraphs in grey, shown until the message text arrives. */
 const SKELETON: (number | null)[] = [92, 100, 86, 64, null, 98, 90, 72, null, 100, 95, 40]
 
-function MessageSkeleton() {
+function MessageSkeleton({ compact }: { compact?: boolean }) {
+  const lines = compact ? SKELETON.slice(0, 4) : SKELETON
   return (
-    <div className="msg-skeleton" role="status" aria-busy="true" aria-label="Loading message">
-      {SKELETON.map((w, i) =>
+    <div className={`msg-skeleton ${compact ? 'is-compact' : ''}`} role="status" aria-busy="true" aria-label="Loading message">
+      {!compact && <div className="skel-banner" />}
+      {lines.map((w, i) =>
         w === null ? <div key={i} className="msg-skeleton-gap" /> : <div key={i} className="skel-line" style={{ width: `${w}%` }} />
       )}
     </div>
@@ -295,10 +334,10 @@ function ThreadItem({ m, allowRemote, dark, appDark }: { m: MessageSummary; allo
         {!open && <span className="thread-preview">{m.preview}</span>}
         <span className="thread-date">{formatFullDate(m.date)}</span>
       </button>
-      {open && (
+      <Collapse open={open}>
         <div className="thread-body">
           {error && <div className="list-error">{error}</div>}
-          {!detail && !error && <div className="msg-loading">Loading…</div>}
+          {!detail && !error && <MessageSkeleton compact />}
           {detail &&
             (detail.html ? (
               <div className={`msg-body-html ${dark ? 'is-dark' : ''}`}>
@@ -310,7 +349,7 @@ function ThreadItem({ m, allowRemote, dark, appDark }: { m: MessageSummary; allo
               </article>
             ))}
         </div>
-      )}
+      </Collapse>
     </div>
   )
 }

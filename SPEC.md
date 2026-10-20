@@ -89,6 +89,13 @@ New methods added by roadmap items are listed in the changelog entry that introd
 
 ## 6. Changelog
 
+### 2026-10-20 — Inbox categories for every account, optional
+- Setting `inboxCategories` (default on), in Settings → General → Message list. Off hides the tabs and clears any active category filter.
+- Tabs now show on every account's inbox and on All inboxes, with a segmented-control design and icons; inactive tabs collapse to icons when the list is narrow.
+- Google accounts still use Gmail's own sorting (`category:` search). Other accounts are sorted by WinMail: `shared/categorize.ts` looks at the sender domain and address, subject, and the List-Id, List-Unsubscribe, Precedence and Auto-Submitted headers (fetched with the list in `fetchSummaries`; `MessageSummary.category`). It is a heuristic and errs towards Primary. The category filter applies to the messages already loaded, so use Load more to dig further.
+- Each tab has its own colour (icon tint, fill when active). Switching tab, folder or account shows skeleton rows (`ListSkeleton` in `MessageList.tsx`, `listSwitching` in `App.tsx`) instead of the old rows vanishing and returning; the sidebar folder list shows skeleton lines while mailboxes load.
+- Not yet checked in the running app or with real non-Google accounts.
+
 ### 2026-10-20 — Settings redesign
 - Settings window rebuilt: navigation on the left (General, Composing, Shortcuts, Claude, Accounts), cards of settings with a title and description on the left and a control on the right, switches instead of checkboxes, segmented choices for theme and format, a shortcuts reference, and account details in cards with a Save bar pinned to the bottom. Same settings and behaviour as before.
 - New settings rows go in `components/SettingsWindow.tsx` using `Group` / `Item` / `Switch` / `Segmented` from `components/settings/controls.tsx`; styles are in `settings.css`. The old `.settings*` rules in `styles.css` are no longer used.

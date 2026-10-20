@@ -27,8 +27,9 @@
 .dock > * {
   pointer-events: auto;
 }
-/* Cards that don't fit stay mounted so their editors keep what was typed. */
-.dock-parked {
+/* Cards that don't fit stay mounted so their editors keep what was typed. Showing one again
+   restarts dock-in, so it slides up into its place. */
+.dock .compose.is-parked {
   display: none;
 }
 .compose-scrim {
@@ -50,7 +51,12 @@
   background: var(--surface);
   box-shadow: var(--compose-shadow);
   animation: dock-in 200ms cubic-bezier(0.2, 0.9, 0.3, 1);
-  transition: right 160ms ease;
+  /* Minimize and restore fold the card down to its header and back; neighbours slide over. */
+  transition:
+    right 160ms ease,
+    width 200ms cubic-bezier(0.2, 0.9, 0.3, 1),
+    height 200ms cubic-bezier(0.2, 0.9, 0.3, 1),
+    border-radius 200ms ease;
 }
 .dock .compose.is-minimized {
   width: 260px;
@@ -66,8 +72,9 @@
   width: min(960px, calc(100vw - 48px));
   height: auto;
   border-radius: 12px;
-  transform: translateX(-50%);
+  /* Centred with translateX(-50%), set as motion's x in ComposeWindow (motion owns the transform). */
   transition: none;
+  /* Coming back from full screen restarts dock-in, so the card visibly re-docks. */
   animation: fade 140ms ease-out;
 }
 .dock-more {
@@ -83,6 +90,7 @@
   box-shadow: var(--compose-shadow);
   color: var(--text-2);
   font-weight: 600;
+  transition: color 120ms ease;
 }
 .dock-more:hover {
   color: var(--text);
@@ -91,6 +99,19 @@
   from {
     opacity: 0;
     transform: translateY(24px);
+  }
+}
+/* Small floating surfaces (suggestions, link popover) and things that arrive (chips). */
+@keyframes compose-pop {
+  from {
+    opacity: 0;
+    transform: scale(0.97) translateY(4px);
+  }
+}
+@keyframes chip-in {
+  from {
+    opacity: 0;
+    transform: scale(0.85);
   }
 }
 
@@ -119,10 +140,14 @@
   flex-shrink: 0;
   border-radius: 6px;
   color: var(--text-2);
+  transition: background-color 120ms ease, color 120ms ease, transform 120ms ease;
 }
 .head-btn:hover {
   background: var(--hover);
   color: var(--text);
+}
+.head-btn:active {
+  transform: scale(0.92);
 }
 .compose-body {
   flex: 1;
@@ -212,6 +237,7 @@
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  transition: background-color 120ms ease;
 }
 .recipients-line:hover {
   background: var(--hover);
@@ -253,6 +279,8 @@
   border-radius: 12px;
   background: var(--chip-bg);
   cursor: default;
+  animation: chip-in 140ms cubic-bezier(0.2, 0.9, 0.3, 1);
+  transition: background-color 120ms ease, color 120ms ease;
 }
 .chip:hover {
   background: var(--chip-hover);
@@ -294,6 +322,7 @@
   place-items: center;
   border-radius: 50%;
   opacity: 0.55;
+  transition: opacity 120ms ease, background-color 120ms ease;
 }
 .chip-x:hover {
   opacity: 1;
@@ -314,6 +343,8 @@
   border-radius: 8px;
   background: var(--surface);
   box-shadow: var(--shadow);
+  transform-origin: top left;
+  animation: compose-pop 120ms ease-out;
 }
 .suggest li {
   display: flex;
@@ -424,6 +455,7 @@
   font-size: 11px;
   line-height: 10px;
   letter-spacing: 1px;
+  transition: background-color 120ms ease;
 }
 .quote-pill:hover {
   background: var(--hover);
@@ -445,6 +477,8 @@
   border: 1px solid var(--hairline);
   border-radius: 8px;
   background: var(--surface-alt);
+  animation: chip-in 160ms cubic-bezier(0.2, 0.9, 0.3, 1);
+  transition: border-color 120ms ease, background-color 120ms ease;
 }
 .attach-chip.is-invalid {
   border-color: var(--danger);
@@ -488,10 +522,14 @@
   place-items: center;
   border-radius: 6px;
   color: var(--text-2);
+  transition: background-color 100ms ease, color 100ms ease, transform 120ms ease;
 }
 .fmt-btn:hover {
   background: var(--hover);
   color: var(--text);
+}
+.fmt-btn:active {
+  transform: scale(0.92);
 }
 .fmt-btn.is-on {
   background: var(--sidebar-selected);
@@ -510,6 +548,8 @@
   border-radius: 10px;
   background: var(--surface);
   box-shadow: var(--shadow);
+  transform-origin: bottom left;
+  animation: compose-pop 140ms ease-out;
 }
 .link-popover label {
   display: flex;
@@ -528,6 +568,7 @@
   color: var(--text);
   font: inherit;
   user-select: text;
+  transition: box-shadow 120ms ease;
 }
 .link-popover input:focus {
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 35%, transparent);
@@ -560,6 +601,7 @@
   font-weight: 600;
   opacity: 0.95;
   pointer-events: none;
+  animation: fade 120ms ease-out;
 }
 
 /* ---------- Footer ---------- */
@@ -591,9 +633,23 @@
   place-items: center;
   border-left: 1px solid rgba(255, 255, 255, 0.35);
 }
+.send-main,
+.send-more {
+  transition: filter 120ms ease, box-shadow 120ms ease;
+}
 .send-main:hover,
 .send-more:hover {
   filter: brightness(1.08);
+}
+.send-main:active,
+.send-more:active {
+  filter: brightness(0.92);
+}
+.send-split {
+  transition: transform 120ms ease;
+}
+.send-split:active {
+  transform: scale(0.97);
 }
 .send-main:focus-visible,
 .send-more:focus-visible {
@@ -608,10 +664,14 @@
   flex-shrink: 0;
   border-radius: 6px;
   color: var(--text-2);
+  transition: background-color 120ms ease, color 120ms ease, opacity 120ms ease, transform 120ms ease;
 }
 .ft-btn:hover:not(:disabled) {
   background: var(--hover);
   color: var(--text);
+}
+.ft-btn:active:not(:disabled) {
+  transform: scale(0.92);
 }
 .ft-btn[aria-pressed='true'] {
   background: var(--hover);
@@ -631,6 +691,7 @@
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  transition: color 160ms ease;
 }
 .ft-status.is-error {
   color: var(--danger);
@@ -649,6 +710,7 @@
   border-radius: 10px;
   background: var(--surface);
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+  animation: compose-pop 180ms cubic-bezier(0.2, 0.9, 0.3, 1);
 }
 .inline-head {
   display: flex;
@@ -670,6 +732,7 @@
   padding: 0 6px;
   border-radius: 6px;
   color: var(--text-2);
+  transition: background-color 120ms ease, color 120ms ease;
 }
 .reply-type:hover {
   background: var(--hover);
@@ -706,9 +769,13 @@
   background: var(--btn-bg);
   box-shadow: 0 0 0 0.5px var(--control-border), 0 1px 1px rgba(0, 0, 0, 0.06);
   font-weight: 500;
+  transition: filter 120ms ease, transform 120ms ease;
 }
 .reply-btn:hover {
   filter: brightness(0.97);
+}
+.reply-btn:active {
+  transform: scale(0.97);
 }
 .draft-bar {
   display: flex;
@@ -737,7 +804,18 @@
 
 @media (prefers-reduced-motion: reduce) {
   .dock .compose,
-  .compose-scrim {
+  .compose-scrim,
+  .suggest,
+  .link-popover,
+  .inline-reply,
+  .chip,
+  .attach-chip,
+  .drop-overlay,
+  .head-btn,
+  .fmt-btn,
+  .ft-btn,
+  .send-split,
+  .reply-btn {
     animation: none;
     transition: none;
   }
@@ -755,7 +833,24 @@
   color: var(--text);
   font: inherit;
   line-height: 1.4;
+  transition: box-shadow 120ms ease;
 }
 .signature-input:focus {
   box-shadow: 0 0 0 1px var(--accent), 0 0 0 4px color-mix(in srgb, var(--accent) 25%, transparent);
+}
+
+/* ---------- Pop-out window ---------- */
+.popout {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  background: var(--surface);
+}
+/* The title bar: drag it, and leave room for the window buttons the system draws on the right. */
+.popout-head {
+  padding-right: calc(var(--wco-right) + 6px);
+  -webkit-app-region: drag;
+}
+.popout-head .head-btn {
+  -webkit-app-region: no-drag;
 }

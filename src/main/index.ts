@@ -32,12 +32,24 @@ const CLOSE_TIMEOUT_MS = 10_000
 const QUIT_TIMEOUT_MS = 15_000
 const MIN_WIDTH = 900
 const MIN_HEIGHT = 560
+/** A pop-out compose window: opening size, smallest size, and the title bar the header sits under. */
+const POPOUT_WIDTH = 780
+const POPOUT_HEIGHT = 680
+const POPOUT_MIN_WIDTH = 520
+const POPOUT_MIN_HEIGHT = 420
+const POPOUT_BAR = 40
+/** Each further pop-out opens this far down and right of the last, so they don't hide each other. */
+const POPOUT_CASCADE = 28
 /** A crashed page reloads at most this often before the window is left as it is. */
 const MAX_RELOADS = 3
 const RELOAD_WINDOW_MS = 60_000
 
 let mail: MailService | null = null
 let outbox: Outbox | null = null
+let mainWin: BrowserWindow | null = null
+/** Pop-out compose windows by web contents id, with what each was opened with. */
+const popouts = new Map<number, { win: BrowserWindow; payload: unknown }>()
+const mainWindow = () => (mainWin && !mainWin.isDestroyed() ? mainWin : null)
 /** Windows whose renderer has saved its drafts, or can't, so they may close. */
 const mayClose = new WeakSet<BrowserWindow>()
 
@@ -98,49 +110,28 @@ function showContextMenu(win: BrowserWindow, p: Electron.ContextMenuParams): voi
   if (items.length) Menu.buildFromTemplate(items).popup({ window: win })
 }
 
-function overlay() {
+function overlay(height = 52) {
   return {
     color: '#00000000',
     symbolColor: nativeTheme.shouldUseDarkColors ? '#ffffff' : '#000000',
-    height: 52
+    height
   }
 }
 
-function createWindow(): BrowserWindow {
-  const isWin = process.platform === 'win32'
-  // Mica needs Windows 11 (build 22000+). Windows 10 gets a solid sidebar.
-  const mica = isWin && Number(release().split('.')[2] ?? 0) >= 22000
+const isWin = process.platform === 'win32'
+// Mica needs Windows 11 (build 22000+). Windows 10 gets a solid sidebar.
+const mica = isWin && Number(release().split('.')[2] ?? 0) >= 22000
 
-  // Reopen where it was last; the first time (or if that spot is gone) open large on big screens:
-  // most of the usable area, but never smaller than the old default.
-  const saved = loadWindowState(MIN_WIDTH, MIN_HEIGHT)
-  const area = screen.getPrimaryDisplay().workAreaSize
-  const width = Math.min(area.width, Math.max(1280, Math.round(area.width * 0.85)))
-  const height = Math.min(area.height, Math.max(820, Math.round(area.height * 0.9)))
+const webPreferences = () => ({
+  preload: join(__dirname, '../preload/index.js'),
+  additionalArguments: [mica ? '--winmail-mica=1' : '--winmail-mica=0'],
+  sandbox: true,
+  contextIsolation: true,
+  nodeIntegration: false
+})
 
-  const win = new BrowserWindow({
-    ...(saved ? saved.bounds : { width, height }),
-    minWidth: MIN_WIDTH,
-    minHeight: MIN_HEIGHT,
-    show: false,
-    title: 'WinMail',
-    titleBarStyle: 'hidden',
-    titleBarOverlay: isWin ? overlay() : undefined,
-    backgroundMaterial: mica ? 'mica' : undefined,
-    backgroundColor: mica ? '#00000000' : undefined,
-    webPreferences: {
-      preload: join(__dirname, '../preload/index.js'),
-      additionalArguments: [mica ? '--winmail-mica=1' : '--winmail-mica=0'],
-      sandbox: true,
-      contextIsolation: true,
-      nodeIntegration: false
-    }
-  })
-
-  if (saved?.maximized) win.maximize()
-  trackWindowState(win)
-  win.once('ready-to-show', () => win.show())
-
+/** What every window does alike: keep links out, save drafts before closing, recover from crashes. */
+function wireWindow(win: BrowserWindow, overlayHeight?: number): void {
   // Links in emails open in the default browser, never inside the app.
   win.webContents.setWindowOpenHandler(({ url }) => {
     if (/^(https?|mailto):/i.test(url)) shell.openExternal(url)
@@ -153,9 +144,11 @@ function createWindow(): BrowserWindow {
     }
   })
 
-  nativeTheme.on('updated', () => {
-    if (isWin && !win.isDestroyed()) win.setTitleBarOverlay(overlay())
-  })
+  const theme = () => {
+    if (isWin && !win.isDestroyed()) win.setTitleBarOverlay(overlay(overlayHeight))
+  }
+  nativeTheme.on('updated', theme)
+  win.on('closed', () => nativeTheme.off('updated', theme))
 
   // Let the renderer save open drafts first; it answers with app:close-ready.
   win.on('close', (e) => {
@@ -187,13 +180,110 @@ function createWindow(): BrowserWindow {
   win.webContents.on('did-finish-load', () => mayClose.delete(win))
 
   win.webContents.on('context-menu', (_e, p) => showContextMenu(win, p))
+}
 
-  if (process.env['ELECTRON_RENDERER_URL']) {
-    win.loadURL(process.env['ELECTRON_RENDERER_URL'])
-  } else {
-    win.loadFile(join(__dirname, '../renderer/index.html'))
-  }
+function loadRenderer(win: BrowserWindow, hash?: string): void {
+  const dev = process.env['ELECTRON_RENDERER_URL']
+  if (dev) win.loadURL(hash ? `${dev}#${hash}` : dev)
+  else win.loadFile(join(__dirname, '../renderer/index.html'), hash ? { hash } : undefined)
+}
+
+function createWindow(): BrowserWindow {
+
+  // Reopen where it was last; the first time (or if that spot is gone) open large on big screens:
+  // most of the usable area, but never smaller than the old default.
+  const saved = loadWindowState(MIN_WIDTH, MIN_HEIGHT)
+  const area = screen.getPrimaryDisplay().workAreaSize
+  const width = Math.min(area.width, Math.max(1280, Math.round(area.width * 0.85)))
+  const height = Math.min(area.height, Math.max(820, Math.round(area.height * 0.9)))
+
+  const win = new BrowserWindow({
+    ...(saved ? saved.bounds : { width, height }),
+    minWidth: MIN_WIDTH,
+    minHeight: MIN_HEIGHT,
+    show: false,
+    title: 'WinMail',
+    titleBarStyle: 'hidden',
+    titleBarOverlay: isWin ? overlay() : undefined,
+    backgroundMaterial: mica ? 'mica' : undefined,
+    backgroundColor: mica ? '#00000000' : undefined,
+    webPreferences: webPreferences()
+  })
+
+  if (saved?.maximized) win.maximize()
+  trackWindowState(win)
+  win.once('ready-to-show', () => win.show())
+
+  wireWindow(win)
+  // Pop-out compose windows belong to this one: they close with it, each saving its draft first.
+  win.on('closed', () => {
+    for (const { win: p } of popouts.values()) if (!p.isDestroyed()) p.close()
+  })
+  loadRenderer(win)
   return win
+}
+
+/** Opens a compose card in a window of its own, a little below and right of the last one. */
+function createPopout(payload: unknown): void {
+  const parent = mainWindow()
+  const area = screen.getDisplayMatching(parent?.getBounds() ?? screen.getPrimaryDisplay().bounds).workArea
+  const width = Math.min(POPOUT_WIDTH, area.width)
+  const height = Math.min(POPOUT_HEIGHT, area.height)
+  const around = parent?.getBounds() ?? area
+  const shift = (popouts.size % 6) * POPOUT_CASCADE
+  const x = Math.round(around.x + (around.width - width) / 2 + shift)
+  const y = Math.round(around.y + (around.height - height) / 2 + shift)
+
+  const win = new BrowserWindow({
+    width,
+    height,
+    x: Math.max(area.x, Math.min(x, area.x + area.width - width)),
+    y: Math.max(area.y, Math.min(y, area.y + area.height - height)),
+    minWidth: Math.min(POPOUT_MIN_WIDTH, width),
+    minHeight: Math.min(POPOUT_MIN_HEIGHT, height),
+    show: false,
+    title: 'New Message',
+    titleBarStyle: 'hidden',
+    titleBarOverlay: isWin ? overlay(POPOUT_BAR) : undefined,
+    backgroundMaterial: mica ? 'mica' : undefined,
+    backgroundColor: mica ? '#00000000' : undefined,
+    webPreferences: webPreferences()
+  })
+  const id = win.webContents.id
+  popouts.set(id, { win, payload })
+  win.on('closed', () => popouts.delete(id))
+  win.once('ready-to-show', () => win.show())
+  wireWindow(win, POPOUT_BAR)
+  loadRenderer(win, 'popout')
+}
+
+/** The compose session id inside a pop-out payload (`{ session: { id } }`), if it has one. */
+function idOf(payload: unknown): string {
+  const id = (payload as { session?: { id?: unknown } } | null)?.session?.id
+  return typeof id === 'string' ? id : ''
+}
+
+/** Pop-out windows: the main window opens them, they hand things back to it. */
+function registerPopouts(): void {
+  const answer = (fn: () => unknown) => {
+    try {
+      return { ok: true, value: fn() }
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : String(err) }
+    }
+  }
+  ipcMain.handle('popout:open', (e, payload: unknown) =>
+    answer(() => {
+      if (e.sender !== mainWindow()?.webContents) throw new Error('Pop-out windows open from the main window.')
+      createPopout(payload)
+    })
+  )
+  ipcMain.handle('popout:payload', (e) => answer(() => popouts.get(e.sender.id)?.payload ?? null))
+  ipcMain.handle('popout:list', () => answer(() => [...popouts.values()].map((p) => idOf(p.payload)).filter(Boolean)))
+  // Only a pop-out speaks to the main window this way; the main window has its own channels.
+  ipcMain.on('popout:send', (e, message: unknown) => {
+    if (popouts.has(e.sender.id)) mainWindow()?.webContents.send('popout:message', message)
+  })
 }
 
 // A second copy would share winmail.json and the IMAP connections; focus the first instead.
@@ -201,7 +291,7 @@ if (!app.requestSingleInstanceLock()) {
   app.quit()
 } else {
   app.on('second-instance', () => {
-    const win = BrowserWindow.getAllWindows()[0]
+    const win = mainWindow()
     if (!win) return
     if (win.isMinimized()) win.restore()
     win.focus()
@@ -224,7 +314,7 @@ if (!app.requestSingleInstanceLock()) {
       for (const w of BrowserWindow.getAllWindows()) w.webContents.send(channel, payload)
     }
     const open = (e: OpenMessageEvent) => {
-      const w = BrowserWindow.getAllWindows()[0]
+      const w = mainWindow()
       if (!w) return
       if (w.isMinimized()) w.restore()
       w.show()
@@ -281,7 +371,8 @@ ${m.preview}` })
     }
     setTimeout(tick, CONTACTS_SCAN_DELAY_MS)
     setInterval(tick, TIMER_MS)
-    const win = createWindow()
+    registerPopouts()
+    const win = (mainWin = createWindow())
     // Let the first mailbox load finish before scanning mail for contacts.
     setTimeout(() => void contacts.scan(), CONTACTS_SCAN_DELAY_MS)
     if (store.recoveredFrom) {
@@ -296,7 +387,7 @@ ${m.preview}` })
     }
 
     app.on('activate', () => {
-      if (BrowserWindow.getAllWindows().length === 0) createWindow()
+      if (BrowserWindow.getAllWindows().length === 0) mainWin = createWindow()
     })
   })
 }

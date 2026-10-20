@@ -10,7 +10,7 @@ Replace the centered, blocking Apple Mail-style compose dialog with Gmail's comp
 
 | Topic | Decision |
 |---|---|
-| Where compose lives | Docked cards at the bottom right of the main window. Non-blocking, minimize to a title bar, full screen, several at once. No separate OS windows. |
+| Where compose lives | Docked cards at the bottom right of the main window. Non-blocking, minimize to a title bar, full screen, several at once. A card can also pop out into a window of its own (see "Pop-out windows"). |
 | Close | Close (x), Esc and Ctrl+W mean Save & close. Clicking outside never closes a card. Discard (trash, Ctrl+Shift+D) deletes the draft, with Undo. |
 | Recipients | Chips for To, Cc and Bcc; invalid addresses turn red and block Send; From picker when there are several accounts. |
 | Body | Rich text with Gmail's formatting bar (toggled by "A", shown by default). Sends HTML plus a plain-text copy. Plain-text mode per message (default from `composeFormat`). |
@@ -193,6 +193,15 @@ The other Claude session, `port-gmail-features-spec`, implements the rest of the
 - **Plain-text part**: a blank line around lists and before a quoted message.
 - **Docs**: README (features, shortcuts, structure) and SPEC.md (changelog, IPC table, roadmap ticks).
 
+### 2026-10-20: pop-out windows
+A docked card gets "Open in new window" (header, between Minimize and Full screen); the pop-out has "Move to main window".
+- **Design**: the pop-out is a second `BrowserWindow` running the same renderer with `#popout`. It owns one card and its own autosave, so typing, Save & close, Discard and Schedule use the same code as in the dock. What must outlive the window (the Undo toast after Send, the scheduled and discarded toasts, "Message sent") is relayed to the main window, which keeps the outbox bookkeeping.
+- **Main**: `src/main/index.ts` splits the shared window wiring into `wireWindow`; adds `createPopout` and the IPC `popout:open` (main window only), `popout:payload`, `popout:list`, `popout:send` (pop-outs only). `mainWindow()` replaces `getAllWindows()[0]`. Pop-outs close, saving first, when the main window closes.
+- **Renderer**: `compose/popout.ts` (payload and message types), `PopoutApp.tsx`, actions `openInWindow`, `returnToMain`, `startPopout`, `startPopoutEvents`; `main.tsx` picks `PopoutApp` for `#popout`.
+- **Recovery copy**: one localStorage key per pop-out (`winmail.compose.recovery.popout.<id>`), so windows don't overwrite each other. The main window restores keys of pop-outs that are no longer open. `forget` now writes the copy at once, because a pop-out closes before a timer would fire.
+- **Checked in the real Electron app** (throwaway profile, account that can't connect): pop out, pop back in, discard from the pop-out (window closes, Undo toast in the main window, Undo works), closing the window with an unsent draft and the recovery on the next load.
+- **Not checked**: sending from a pop-out with a working account (Undo toast in main, "Message sent"), Schedule send, drag and drop and paste into a pop-out, Mica and dark title bar buttons, several pop-outs at once.
+
 ## Verification done so far (mock mode in an offscreen Electron window; real accounts not used)
 - `npm run typecheck` and `npm run build` pass. The real main process starts with a temporary empty profile and no errors.
 - 32 checks of the pure modules in a real DOM (plain-text output, sanitizing, theme colours, quotes, addresses, dock layout, send checks, schedule presets, shortcuts): all pass.
@@ -296,7 +305,7 @@ Tick each check and note the account or provider used.
 
 ## Follow-ups (out of scope for now)
 
-- Separate OS compose windows (pop-out to a window).
+- Pop-outs: opening a draft from the Drafts list while its card is popped out opens a second copy; Undo send brings the card back to the main window's dock, not the pop-out; inline replies pop out to the dock first.
 - Font family, size and colour; alignment; image resize handles; @-mentions.
 - Rich (HTML) or multiple signatures per account; send-as aliases.
 - Unit tests (no test framework yet): `dockLayout`, `addresses`, `checks`, `quote`, `outgoing` are good first candidates.

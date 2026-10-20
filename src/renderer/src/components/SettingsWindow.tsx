@@ -13,9 +13,10 @@ import {
   X,
   type LucideIcon
 } from 'lucide-react'
+import { motion } from 'motion/react'
 import { useEffect, useState, type ReactNode } from 'react'
-import { useEscape } from '../useEscape'
-import type { Account, Appearance, ComposeFormat, ContactsStatus, MessageAppearance, Settings } from '@shared/types'
+import { Backdrop, panelExit, useModalEscape } from './Backdrop'
+import type { Account, Appearance, ComposeFormat, ContactsStatus, ListDensity, MessageAppearance, Settings } from '@shared/types'
 import { getProvider } from '@shared/providers'
 import { api } from '../api'
 import { Row, ServerFields } from './forms'
@@ -45,11 +46,11 @@ const PAGES: { id: SettingsTab; label: string; icon: LucideIcon }[] = [
 ]
 
 export function SettingsWindow(p: Props) {
-  useEscape(p.onClose)
+  useModalEscape(p.onClose)
   const page = PAGES.find((x) => x.id === p.tab) ?? PAGES[0]!
   return (
-    <div className="modal-backdrop" onMouseDown={p.onClose}>
-      <div className="st-window" role="dialog" aria-label="Settings" onMouseDown={(e) => e.stopPropagation()}>
+    <Backdrop onMouseDown={p.onClose}>
+      <motion.div {...panelExit} className="st-window" role="dialog" aria-label="Settings" onMouseDown={(e) => e.stopPropagation()}>
         <nav className="st-nav" aria-label="Settings sections">
           <div className="st-nav-title">Settings</div>
           {PAGES.map((x) => (
@@ -83,8 +84,8 @@ export function SettingsWindow(p: Props) {
             )}
           </div>
         </section>
-      </div>
-    </div>
+      </motion.div>
+    </Backdrop>
   )
 }
 
@@ -124,6 +125,16 @@ function GeneralPage({ settings, onChange }: PageProps) {
             ]}
           />
         </Item>
+        <Item
+          title="Reduce animations"
+          description="Skip movement and fades. WinMail also follows Windows' Animation effects setting."
+        >
+          <Switch
+            label="Reduce animations"
+            checked={settings.reduceMotion}
+            onChange={(reduceMotion) => onChange({ ...settings, reduceMotion })}
+          />
+        </Item>
       </Group>
 
       <Group title="New mail">
@@ -152,11 +163,56 @@ function GeneralPage({ settings, onChange }: PageProps) {
       </Group>
 
       <Group title="Message list">
+        <Item
+          title="Layout"
+          description="Compact shows each message on one line with just the sender, title and date. Comfortable also shows the start of the message."
+        >
+          <Segmented<ListDensity>
+            label="List layout"
+            value={settings.listDensity}
+            onChange={(listDensity) => onChange({ ...settings, listDensity })}
+            options={[
+              { value: 'compact', label: 'Compact' },
+              { value: 'comfortable', label: 'Comfortable' }
+            ]}
+          />
+        </Item>
+        {settings.listDensity === 'comfortable' && (
+          <Item title="Preview length" description="Lines of message text shown under the title.">
+            <Select
+              aria-label="Preview length"
+              value={String(settings.listPreviewLines || 2)}
+              onChange={(v) => onChange({ ...settings, listPreviewLines: Number(v) as Settings['listPreviewLines'] })}
+              options={[
+                { value: '1', label: '1 line' },
+                { value: '2', label: '2 lines' },
+                { value: '3', label: '3 lines' }
+              ]}
+            />
+          </Item>
+        )}
         <Item title="Group by conversation" description="Show replies together under one entry.">
           <Switch
             label="Group messages by conversation"
             checked={settings.conversations}
             onChange={(conversations) => onChange({ ...settings, conversations })}
+          />
+        </Item>
+        <Item title="Inbox categories" description="Show Primary, Social, Promotions, Updates and Forums tabs above the inbox. Google accounts use Gmail's own sorting; other accounts are sorted by WinMail from the sender and message headers, so it can get one wrong.">
+          <Switch
+            label="Show inbox categories"
+            checked={settings.inboxCategories}
+            onChange={(inboxCategories) => onChange({ ...settings, inboxCategories })}
+          />
+        </Item>
+      </Group>
+
+      <Group title="Deleting">
+        <Item title="Confirm before deleting" description="Ask for confirmation before moving messages to the Bin.">
+          <Switch
+            label="Confirm before deleting"
+            checked={settings.confirmDelete}
+            onChange={(confirmDelete) => onChange({ ...settings, confirmDelete })}
           />
         </Item>
       </Group>

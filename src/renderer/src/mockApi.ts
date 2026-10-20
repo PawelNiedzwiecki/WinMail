@@ -472,7 +472,20 @@ export function createMockApi(): WinMailApi {
     onCloseRequested() {
       return () => {}
     },
-    closeReady() {}
+    closeReady() {},
+    async openComposeWindow() {
+      throw new Error('Pop-out windows need the desktop app.')
+    },
+    async popoutPayload() {
+      return null
+    },
+    async listPopouts() {
+      return []
+    },
+    popoutSend() {},
+    onPopoutMessage() {
+      return () => {}
+    }
   }
   return api
 }

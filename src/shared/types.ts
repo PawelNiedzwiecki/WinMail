@@ -99,9 +99,11 @@ export interface MessageSummary {
   parents?: string[]
   /** Gmail's X-GM-THRID; groups conversations exactly on Google accounts. */
   threadId?: string
+  /** Inbox category worked out by WinMail from sender and headers (see shared/categorize.ts). */
+  category?: GmailCategory
 }
 
-/** Gmail inbox tabs. */
+/** Inbox category tabs: Gmail's own on Google accounts, worked out by WinMail elsewhere. */
 export type GmailCategory = 'primary' | 'social' | 'promotions' | 'updates' | 'forums'
 
 export interface AttachmentInfo {
@@ -229,7 +231,13 @@ export type MessageAppearance = 'light' | 'dark' | 'app'
 
 export type ComposeFormat = 'rich' | 'plain'
 
+/** Row spacing in the message list. */
+export type ListDensity = 'compact' | 'comfortable'
+
 export interface Settings {
+  /** Lines of message text shown under the subject in the list; 0 shows the title only. */
+  listPreviewLines: 0 | 1 | 2 | 3
+  listDensity: ListDensity
   /** 0 = manual only */
   checkIntervalMin: number
   loadRemoteContent: boolean
@@ -242,11 +250,19 @@ export interface Settings {
   gmailShortcuts: boolean
   /** Group the list into conversations. */
   conversations: boolean
+  /** Show category tabs (Primary, Social, …) above the inbox. */
+  inboxCategories: boolean
+  /** Ask before moving messages to the Bin. */
+  confirmDelete: boolean
   composeFormat: ComposeFormat
+  /** Turn animations off in the app; Windows' own "Animation effects" setting also applies. */
+  reduceMotion: boolean
   templates: Template[]
 }
 
 export const DEFAULT_SETTINGS: Settings = {
+  listPreviewLines: 2,
+  listDensity: 'comfortable',
   checkIntervalMin: 5,
   loadRemoteContent: false,
   appearance: 'system',
@@ -255,7 +271,10 @@ export const DEFAULT_SETTINGS: Settings = {
   notifyNewMail: true,
   gmailShortcuts: false,
   conversations: true,
+  inboxCategories: true,
+  confirmDelete: false,
   composeFormat: 'rich',
+  reduceMotion: false,
   templates: []
 }
 
@@ -371,4 +390,17 @@ export interface WinMailApi {
   /** The window is about to close: save open drafts, then call `closeReady()`. */
   onCloseRequested(cb: () => void): () => void
   closeReady(): void
+
+  /**
+   * Pop-out compose windows: a card moves to a window of its own and back. The payloads belong to
+   * the renderer; the main process only carries them.
+   */
+  openComposeWindow(payload: unknown): Promise<void>
+  /** In a pop-out window: what it was opened with. */
+  popoutPayload(): Promise<unknown | null>
+  /** Ids of the pop-out windows that are open. */
+  listPopouts(): Promise<string[]>
+  /** In a pop-out window: tells the main window something, e.g. to take the card back. */
+  popoutSend(message: unknown): void
+  onPopoutMessage(cb: (message: unknown) => void): () => void
 }

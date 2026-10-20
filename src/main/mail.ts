@@ -31,6 +31,7 @@ import type {
   Unsubscribe
 } from '../shared/types'
 import { getProvider } from '../shared/providers'
+import { categorize } from '../shared/categorize'
 import type { Snoozed, Store } from './store'
 import { decodeCharset, decodeTransfer, htmlToText, makePreview } from './text'
 import { GoogleTokens, REAUTH_MESSAGE, signIn as googleSignIn } from './google'
@@ -637,7 +638,7 @@ export class MailService {
         internalDate: true,
         bodyStructure: true,
         threadId: true,
-        headers: ['references']
+        headers: ['references', 'list-id', 'list-unsubscribe', 'precedence', 'auto-submitted']
       },
       { uid: byUid }
     )
@@ -679,15 +680,18 @@ export class MailService {
       .map((r): MessageSummary => {
         const env = r.envelope
         const date = env?.date ?? r.internalDate ?? new Date()
-        const refs = messageIds(r.headers?.toString())
+        const hdr = r.headers?.toString() ?? ''
+        const refs = messageIds(hdr)
+        const from = toAddresses(env?.from)[0] ?? { name: '(Unknown)', email: '' }
+        const subject = env?.subject || '(No Subject)'
         return {
           key: `${accountId}|${path}|${r.uid}`,
           accountId,
           mailbox: path,
           uid: r.uid,
-          from: toAddresses(env?.from)[0] ?? { name: '(Unknown)', email: '' },
+          from,
           to: toAddresses(env?.to),
-          subject: env?.subject || '(No Subject)',
+          subject,
           preview: this.previews.get(cacheKey(r.uid)) ?? '',
           date: new Date(date).toISOString(),
           seen: r.flags?.has('\\Seen') ?? false,
@@ -695,7 +699,15 @@ export class MailService {
           hasAttachments: hasAttachments(r.bodyStructure),
           messageId: env?.messageId || undefined,
           parents: [...new Set([...refs, ...messageIds(env?.inReplyTo)])],
-          threadId: r.threadId
+          threadId: r.threadId,
+          category: categorize({
+            email: from.email,
+            subject,
+            listId: /^list-id:/im.test(hdr),
+            listUnsubscribe: /^list-unsubscribe:/im.test(hdr),
+            bulk: /^precedence:\s*(bulk|list|junk)/im.test(hdr),
+            automated: /^auto-submitted:\s*(?!no\b)\S/im.test(hdr)
+          })
         }
       })
       .sort((a, b) => b.date.localeCompare(a.date))

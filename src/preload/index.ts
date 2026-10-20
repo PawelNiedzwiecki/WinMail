@@ -95,7 +95,13 @@ const api: WinMailApi = {
 
   showEmojiPanel: () => ipcRenderer.send('app:emoji'),
   onCloseRequested: (cb) => on('app:close-requested', cb),
-  closeReady: () => ipcRenderer.send('app:close-ready')
+  closeReady: () => ipcRenderer.send('app:close-ready'),
+
+  openComposeWindow: (payload) => call('popout:open', payload),
+  popoutPayload: () => call('popout:payload'),
+  listPopouts: () => call('popout:list'),
+  popoutSend: (message) => ipcRenderer.send('popout:send', message),
+  onPopoutMessage: (cb) => on('popout:message', cb)
 }
 
 contextBridge.exposeInMainWorld('winmail', api)

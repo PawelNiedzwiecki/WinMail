@@ -7,10 +7,10 @@ Apple Mail-style email client for Windows. Electron + React + TypeScript.
 Requires Node 18+ (Node 22 LTS recommended).
 
 ```bash
-npm install
-npm run dev        # dev mode with hot reload
-npm run build      # production build into out/
-npm run dist:win   # Windows installer into dist/ (run on Windows)
+yarn install
+yarn dev        # dev mode with hot reload
+yarn build      # production build into out/
+yarn dist:win   # Windows installer into dist/ (run on Windows)
 ```
 
 Open `out/renderer/index.html` through a local server in a plain browser to get a mock mode with fake accounts (`?empty` starts with none).
@@ -39,7 +39,7 @@ Sign in with Google needs your own OAuth client:
 3. **Audience**: choose External. While the app is in Testing, add your Gmail addresses as test users.
 4. **Data Access**: add the scopes `https://mail.google.com/`, `.../auth/contacts.readonly` and `.../auth/contacts.other.readonly`.
 5. **Clients > Create client**: type **Desktop app**. Copy the client ID and secret.
-6. Copy `.env.example` to `.env.local`, fill in both values, then `npm run dev` or rebuild.
+6. Copy `.env.example` to `.env.local`, fill in both values, then `yarn dev` or rebuild.
 
 WinMail opens Google in your default browser and receives the answer on `http://127.0.0.1:<random port>` (PKCE). IMAP and SMTP then log in with XOAUTH2.
 

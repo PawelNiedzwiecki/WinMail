@@ -1,4 +1,4 @@
-import { useSyncExternalStore } from 'react'
+import { useRef, useSyncExternalStore } from 'react'
 import type { MessageDetail, MessageSummary, OutgoingAttachment } from '@shared/types'
 import type { Chip } from './addresses'
 
@@ -170,6 +170,17 @@ export function useSession(id: string): ComposeSession | undefined {
     },
     () => sessions.get(id)
   )
+}
+
+/**
+ * Like useSession, but keeps the last state once the session is gone, so a card that was
+ * just closed or sent can still draw itself while it animates out.
+ */
+export function useLastSession(id: string): ComposeSession | undefined {
+  const live = useSession(id)
+  const last = useRef(live)
+  if (live) last.current = live
+  return live ?? last.current
 }
 
 export function useSessionList(): SessionEntry[] {
