@@ -1,6 +1,5 @@
-import { BrowserWindow, dialog, ipcMain, nativeTheme, net } from 'electron'
-import { stat, writeFile } from 'fs/promises'
-import { basename } from 'path'
+import { app, BrowserWindow, dialog, ipcMain, nativeTheme, net } from 'electron'
+import { writeFile } from 'fs/promises'
 import type {
   AccountInput,
   AccountUpdate,
@@ -15,6 +14,7 @@ import { cancelSignIn, revoke } from './google'
 import type { Contacts } from './contacts'
 import type { Outbox } from './outbox'
 import { runAi } from './ai'
+import { AttachmentGrants, TEMP_ROOT, saveTempFile } from './attachments'
 
 type Handler = (...args: never[]) => unknown
 type Flags = { seen?: boolean; flagged?: boolean }
@@ -54,12 +54,21 @@ async function printHtml(html: string): Promise<void> {
 }
 
 export function registerIpc(store: Store, mail: MailService, contacts: Contacts, outbox: Outbox): void {
+  const attachments = new AttachmentGrants([store.outboxDir, TEMP_ROOT])
+
   handle('accounts:list', () => store.listAccounts())
   handle('accounts:test', (input: AccountInput) => mail.test(input))
   handle('accounts:add', (input: AccountInput) => store.addAccount(input))
   handle('accounts:update', async (u: AccountUpdate) => {
+    const before = store.getAccount(u.account.id)
     const acc = store.updateAccount(u)
-    await mail.disconnect(acc.id) // reconnect with new settings next time
+    // Reconnect only when the connection itself changed, not for a new name or signature.
+    const server =
+      !!u.password ||
+      before.username !== acc.username ||
+      before.enabled !== acc.enabled ||
+      JSON.stringify([before.imap, before.smtp]) !== JSON.stringify([acc.imap, acc.smtp])
+    if (server) await mail.disconnect(acc.id)
     if (u.password) contacts.rescan(acc.id)
     return acc
   })
@@ -123,20 +132,37 @@ export function registerIpc(store: Store, mail: MailService, contacts: Contacts,
     const opts = { properties: ['openFile', 'multiSelections'] as Array<'openFile' | 'multiSelections'> }
     const res = win ? await dialog.showOpenDialog(win, opts) : await dialog.showOpenDialog(opts)
     if (res.canceled) return []
-    return Promise.all(
-      res.filePaths.map(async (path) => ({ path, filename: basename(path), size: (await stat(path)).size }))
-    )
+    return Promise.all(res.filePaths.map((path) => attachments.grant(path)))
   })
+  // Paths come from webUtils.getPathForFile in the preload, so only real dropped files get here.
+  handle('compose:addFiles', (paths: string[]) => {
+    if (!Array.isArray(paths) || paths.some((p) => typeof p !== 'string')) throw new Error('Nothing to attach.')
+    return Promise.all(paths.map((path) => attachments.grant(path)))
+  })
+  handle('compose:saveImage', (name: string, bytes: Uint8Array) => saveTempFile(name, bytes))
   handle('mail:send', async (input: SendInput) => {
+    attachments.check(input)
     await mail.send(input)
     contacts.recordSent(input.accountId, input.to, input.cc, input.bcc)
   })
-  handle('mail:saveDraft', (input: SendInput) => mail.saveDraft(input))
+  handle('mail:saveDraft', (input: SendInput) => {
+    attachments.check(input)
+    return mail.saveDraft(input)
+  })
   handle('mail:deleteDraft', (id: string, uid: number) => mail.deleteDraft(id, uid))
   handle('mail:openDraft', (id: string, path: string, uid: number) => mail.openDraft(id, path, uid))
-  handle('outbox:schedule', (input: SendInput, sendAt: string) => outbox.schedule(input, sendAt))
+  handle('outbox:schedule', (input: SendInput, sendAt: string) => {
+    attachments.check(input)
+    return outbox.schedule(input, sendAt)
+  })
+  handle('outbox:queue', (input: SendInput) => {
+    attachments.check(input)
+    return outbox.queue(input)
+  })
+  handle('outbox:takeFailed', () => outbox.takeFailed())
   handle('outbox:list', () => outbox.list())
   handle('outbox:cancel', (id: string) => outbox.cancel(id))
+  ipcMain.on('app:emoji', () => app.showEmojiPanel())
 
   handle('ai:available', () => store.hasAiKey())
   handle('ai:setKey', (key: string | null) => store.setAiKey(key?.trim() || null))

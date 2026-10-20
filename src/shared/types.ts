@@ -176,6 +176,30 @@ export interface ScheduledInfo {
   error?: string
 }
 
+/** Why a message waits in the outbox: the undo-send delay, or Schedule send. */
+export type OutboxKind = 'undo' | 'scheduled'
+
+/** A message held for the undo-send delay. */
+export interface QueuedSend {
+  id: string
+  /** ISO time it goes out unless taken back with `cancelScheduled`. */
+  sendAt: string
+}
+
+export interface OutboxEvent {
+  id: string
+  kind: OutboxKind
+  state: 'sent' | 'failed'
+  error?: string
+}
+
+/** An undo-send message that could not be sent, handed back once so Compose can reopen it. */
+export interface FailedSend {
+  id: string
+  input: SendInput
+  error: string
+}
+
 export interface Template {
   id: string
   name: string
@@ -304,7 +328,17 @@ export interface WinMailApi {
   pickAttachments(): Promise<OutgoingAttachment[]>
   /** Disk path of a file dropped into the window. */
   pathForFile(file: File): string
+  /** Files dropped or pasted into Compose, ready to attach; folders and unsaved items are refused. */
+  addDroppedFiles(files: File[]): Promise<OutgoingAttachment[]>
+  /** Saves a pasted image to a temporary file so it can be attached. */
+  saveClipboardImage(file: File): Promise<OutgoingAttachment>
   send(input: SendInput): Promise<void>
+  /** Sends after the undo delay (`undoSendSec`); `cancelScheduled(id)` takes it back until then. */
+  queueSend(input: SendInput): Promise<QueuedSend>
+  /** Undo-send messages that failed since the last call, for reopening in Compose. */
+  takeFailedSends(): Promise<FailedSend[]>
+  /** A queued or scheduled message was sent, or failed. */
+  onOutbox(cb: (e: OutboxEvent) => void): () => void
   /** Saves to Drafts, replacing `input.draftUid`; returns the new copy's UID when known. */
   saveDraft(input: SendInput): Promise<number | null>
   deleteDraft(accountId: string, uid: number): Promise<void>
@@ -331,4 +365,10 @@ export interface WinMailApi {
   onMailChanged(cb: (e: MailChangedEvent) => void): () => void
   onMailProgress(cb: (e: MailProgressEvent) => void): () => void
   onOpenMessage(cb: (e: OpenMessageEvent) => void): () => void
+
+  /** Opens the Windows emoji picker at the cursor. */
+  showEmojiPanel(): void
+  /** The window is about to close: save open drafts, then call `closeReady()`. */
+  onCloseRequested(cb: () => void): () => void
+  closeReady(): void
 }

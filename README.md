@@ -53,10 +53,23 @@ Existing app-password Google accounts can switch with **Sign in with Google…**
 - Unified "All Inboxes" plus per-account inboxes under Favourites
 - Real IMAP: folders with unread counts, message list with previews, read/unread, flag, archive, delete, junk
 - New mail push via IMAP IDLE, plus periodic check (Settings > General)
-- SMTP sending with reply, reply all, forward and From account picker; copy saved to Sent where the server doesn't do it
+- Gmail-style compose in the main window: docked cards at the bottom right (minimize, full screen, several at once), recipient chips with To, Cc and Bcc, rich text with a formatting bar (or plain text mode), attachments by button, drag and drop or paste, per-account signatures, templates, emoji picker and spell check suggestions on right-click
+- Drafts save to the account's Drafts folder as you type (and are kept locally in case of a crash), so they show up on your other devices; open one from Drafts to continue it
+- Reply, reply all and forward open inline under the message, with the quote folded behind `···` and a button to pop the reply out into a docked card
+- Undo send (Settings > General), Schedule send from the Send arrow, and an optional "Suggest a reply" with your Claude API key
+- SMTP sending with the From account picker; copy saved to Sent where the server doesn't do it
 - Recipient autocomplete in To and Cc from the From account's address book (Google Contacts with Google sign-in, iCloud and Fastmail over CardDAV with the app password) plus people in its Sent mail and Inbox; cached in `%APPDATA%\winmail\contacts.json`, status in Settings > Accounts
+- Undo for archive, delete, junk and moves; Move to any folder; Snooze (the message comes back to the Inbox, unread)
+- Select several messages (Ctrl-click, Shift-click, Ctrl+A) and act on them at once
+- Conversation view (Settings > General): replies grouped with a count, earlier messages shown above the newest; Gmail includes your Sent replies
+- Server search: the search box also searches the server, with Gmail search operators on Google accounts; older mail loads as you scroll
+- Gmail inbox tabs (Primary, Social, Promotions, Updates, Forums) on Google accounts
+- One-click unsubscribe banner for mailing lists; Print and Show Original from the message's ··· menu; Mark All as Read on a folder's right-click menu
+- Windows notifications for new mail while WinMail is in the background; click one to open the message
+- Scheduled list in the sidebar to edit or cancel scheduled mail
+- Optional Claude features with your own API key (Settings > General): Summarise a message, Suggest a reply
 - HTML mail sanitised with DOMPurify in a sandboxed iframe; remote images blocked until you allow them
-- Attachments: click to save
+- Attachments in received mail: click to save
 - Windows 11 Mica sidebar, native window buttons, light and dark mode
 
 ## Shortcuts
@@ -65,13 +78,45 @@ Existing app-password Google accounts can switch with **Sign in with Google…**
 | --- | --- |
 | Ctrl+N | New message |
 | Ctrl+R / Ctrl+Shift+R | Reply / Reply all |
-| Ctrl+Shift+F | Forward |
+| Ctrl+Shift+F | Forward (in a message: choose the From account) |
 | Ctrl+F | Search |
 | Ctrl+, | Settings |
+| Ctrl+. | Next open message card |
 | Del | Delete |
-| Up / Down | Previous / next message |
+| Up / Down | Previous / next message (with Shift: extend the selection) |
+| Ctrl+A / Esc | Select all messages / clear the selection |
+| Enter / double-click | Open a draft in Drafts |
+
+With Gmail-style shortcuts on (Settings > General), outside text fields:
+
+| Keys | Action |
+| --- | --- |
+| j / k | Next / previous message |
+| e / # / ! | Archive / delete / junk |
+| r / a / f | Reply / reply all / forward |
+| s | Flag |
+| Shift+I / Shift+U | Mark read / unread |
+| x | Add to or remove from the selection |
+| v / b | Move to… / Snooze |
+| z | Undo the last move |
+| c / / | Compose / search |
+
+In a message card or inline reply:
+
+| Keys | Action |
+| --- | --- |
 | Ctrl+Enter | Send |
-| Esc | Close dialog |
+| Ctrl+S | Save draft now |
+| Esc / Ctrl+W | Save and close (Esc leaves full screen first; in an inline reply it returns to the list) |
+| Ctrl+Shift+D | Discard draft |
+| Ctrl+Shift+C / Ctrl+Shift+B | Add Cc / Bcc |
+| Ctrl+K | Insert link |
+| Ctrl+B / I / U | Bold / italic / underline |
+| Ctrl+Shift+7 / 8 / 9 | Numbered list / bulleted list / quote |
+| Ctrl+[ / Ctrl+] | Indent less / more |
+| Ctrl+\ | Remove formatting |
+| Ctrl+Shift+V | Paste as plain text |
+| Shift+Esc | Back to the message list |
 
 ## Structure
 
@@ -80,21 +125,28 @@ src/
   shared/     Types and provider presets used by both processes
   main/       Electron main process
     store.ts  Accounts, settings, encrypted passwords
-    mail.ts   IMAP (imapflow) and SMTP (nodemailer)
+    mail.ts   IMAP (imapflow) and SMTP (nodemailer), drafts on a second IMAP connection
+    outbox.ts Undo-send queue and scheduled mail
+    attachments.ts  Which files the page may attach; temporary files for pasted images
     google.ts Google OAuth sign-in and access tokens
     contacts.ts / addressbook.ts  Autocomplete contacts: Google People API, CardDAV, mail history
     ipc.ts    IPC handlers
   preload/    Typed bridge (window.winmail)
   renderer/   React UI
     src/api.ts       Bridge, or mock when run in a browser
-    src/components/  Sidebar, Toolbar, MessageList, MessageView, Compose,
-                     SettingsWindow, AddAccount, Welcome, HtmlBody
+    src/components/  Sidebar, Toolbar, MessageList, MessageView, SettingsWindow,
+                     AddAccount, Welcome, HtmlBody, ToastStack, Dialog, FolderPicker,
+                     WhenPicker (snooze), SourceDialog, ScheduledDialog
+    src/threads.ts   Conversation grouping
+    src/print.ts     Printable copy of a message
+    src/components/compose/  ComposeDock, ComposeWindow, ComposeForm, InlineReply,
+                     RecipientField, RichEditor, FormatBar, ComposeFooter, ...
+    src/compose/     Compose state and logic: sessions, actions, autosave, quote,
+                     sanitize, outgoing (HTML and plain text), checks (see COMPOSE.md)
 ```
 
 ## Next steps
 
 1. OAuth2 for Microsoft (enables Outlook)
 2. Local SQLite cache for offline reading and instant startup
-3. Server-side search (IMAP SEARCH) across all mail
-4. Rich-text compose and attachments on send
-5. Threads / conversations
+3. Check the Gmail features against real accounts (see SPEC.md changelog)

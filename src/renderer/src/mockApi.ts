@@ -2,9 +2,11 @@
 import {
   DEFAULT_SETTINGS,
   type Account,
+  type FailedSend,
   type MailboxInfo,
   type MessageDetail,
   type MessageSummary,
+  type OutboxEvent,
   type ScheduledInfo,
   type SendInput,
   type Settings,
@@ -21,6 +23,13 @@ export function createMockApi(): WinMailApi {
   let scheduled: (ScheduledInfo & { input: SendInput })[] = []
   const scheduledListeners = new Set<() => void>()
   const scheduledChanged = () => scheduledListeners.forEach((cb) => cb())
+  /** Messages inside the undo-send delay. A subject containing "fail" fails, for testing. */
+  const undoQueue = new Map<string, { input: SendInput; timer: number }>()
+  let failedSends: FailedSend[] = []
+  const outboxListeners = new Set<(e: OutboxEvent) => void>()
+  const outboxEvent = (e: OutboxEvent) => outboxListeners.forEach((cb) => cb(e))
+  /** What each saved draft was made from, so reopening it gets every field back. */
+  const draftInputs = new Map<string, SendInput>()
 
   let accounts: Account[] = empty
     ? []
@@ -113,6 +122,9 @@ export function createMockApi(): WinMailApi {
   let messages: MessageDetail[] = [
     msg('icloud', 'INBOX', ['Adam Baumgartner', 'adam@example.com'], 'Flat keys and move-in day',
       'Hey,\n\nAgent says keys are ready from Friday. Can you do 10:00 at Old Station House? I can bring the van.\n\nAdam', 40, { flagged: true }),
+    // A reply to the message above, so the list shows a conversation.
+    msg('icloud', 'INBOX', ['Adam Baumgartner', 'adam@example.com'], 'Re: Flat keys and move-in day',
+      'Actually 11:00 works better for the agent. Still fine for you?\n\nAdam', 8, { parents: [`<${uid}@mock>`] }),
     msg('gmail', 'INBOX', ['Monzo', 'help@monzo.com'], 'Your October statement is ready',
       'Hi Pawel, your statement for October is now available in the app.', 12, {
         html: '<div style="font-family:sans-serif;max-width:560px"><h2 style="color:#14233c">Your statement is ready</h2><p>Hi Pawel,</p><p>Your statement for October is now available in the app. <a href="https://monzo.com">Open Monzo</a></p><img src="https://example.com/tracker.png" width="1" height="1"></div>',
@@ -311,39 +323,81 @@ export function createMockApi(): WinMailApi {
     pathForFile(file) {
       return file.name
     },
+    async addDroppedFiles(files) {
+      return files.map((f) => ({ path: `C:\\mock\\${f.name}`, filename: f.name, size: f.size }))
+    },
+    async saveClipboardImage(file) {
+      const filename = file.name || 'image.png'
+      return { path: `C:\\mock\\paste\\${filename}`, filename, size: file.size }
+    },
     async send(input) {
       await sleep(500)
       const sent = boxes[input.accountId]?.find((b) => b.specialUse === 'sent')
       if (sent) {
-        messages.push(msg(input.accountId, sent.path, ['Me', 'me'], input.subject, input.text, 0, { seen: true }))
+        messages.push(
+          msg(input.accountId, sent.path, ['Me', 'me'], input.subject, input.text, 0, { seen: true, html: input.html ?? null })
+        )
       }
       if (input.draftUid) await api.deleteDraft(input.accountId, input.draftUid)
+    },
+    async queueSend(input) {
+      const id = crypto.randomUUID()
+      const delay = settings.undoSendSec * 1000
+      const timer = window.setTimeout(async () => {
+        undoQueue.delete(id)
+        if (/fail/i.test(input.subject)) {
+          const error = 'Mock failure: the server refused the message.'
+          failedSends.push({ id, input, error })
+          outboxEvent({ id, kind: 'undo', state: 'failed', error })
+          return
+        }
+        await api.send(input)
+        outboxEvent({ id, kind: 'undo', state: 'sent' })
+      }, delay)
+      undoQueue.set(id, { input, timer })
+      return { id, sendAt: new Date(Date.now() + delay).toISOString() }
+    },
+    async takeFailedSends() {
+      const list = failedSends
+      failedSends = []
+      return list
+    },
+    onOutbox(cb) {
+      outboxListeners.add(cb)
+      return () => outboxListeners.delete(cb)
     },
     async saveDraft(input) {
       await sleep(150)
       const drafts = boxes[input.accountId]?.find((b) => b.specialUse === 'drafts')
-      if (!drafts) return null
+      if (!drafts) throw new Error("Drafts can't be saved: this account has no Drafts folder.")
       if (input.draftUid) await api.deleteDraft(input.accountId, input.draftUid)
       const d = msg(input.accountId, drafts.path, ['Me', 'me'], input.subject || '(No Subject)', input.text, 0, {
         seen: true,
         html: input.html ?? null
       })
       messages.push(d)
+      draftInputs.set(`${input.accountId}|${d.uid}`, { ...input, draftUid: undefined })
       return d.uid
     },
     async deleteDraft(id, u) {
       messages = messages.filter((m) => !(m.accountId === id && m.uid === u))
+      draftInputs.delete(`${id}|${u}`)
     },
     async openDraft(id, mailbox, u) {
       const m = find(id, mailbox, u)
       const drafts = boxes[id]?.find((b) => b.specialUse === 'drafts')
+      const draftUid = drafts?.path === mailbox ? u : undefined
+      const saved = draftInputs.get(`${id}|${u}`)
+      if (saved) return { ...saved, draftUid }
       return {
         accountId: id,
         to: m.to.map((a) => a.email).join(', '),
+        cc: m.cc.map((a) => a.email).join(', '),
         subject: m.subject,
         text: m.text,
         html: m.html ?? undefined,
-        draftUid: drafts?.path === mailbox ? u : undefined
+        attachments: m.attachments.map((a) => ({ path: `C:\\mock\\${a.filename}`, filename: a.filename, size: a.size })),
+        draftUid
       }
     },
     async scheduleSend(input, sendAt) {
@@ -357,6 +411,12 @@ export function createMockApi(): WinMailApi {
       return scheduled.map(({ input: _i, ...info }) => info)
     },
     async cancelScheduled(id) {
+      const queued = undoQueue.get(id)
+      if (queued) {
+        window.clearTimeout(queued.timer)
+        undoQueue.delete(id)
+        return queued.input
+      }
       const item = scheduled.find((s) => s.id === id)
       if (!item) throw new Error('This message has already been sent.')
       scheduled = scheduled.filter((s) => s.id !== id)
@@ -405,7 +465,14 @@ export function createMockApi(): WinMailApi {
     },
     onOpenMessage() {
       return () => {}
-    }
+    },
+    showEmojiPanel() {
+      console.info('Emoji panel opens here in WinMail.')
+    },
+    onCloseRequested() {
+      return () => {}
+    },
+    closeReady() {}
   }
   return api
 }

@@ -8,6 +8,7 @@ import {
   type AccountInput,
   type AccountUpdate,
   type AuthMethod,
+  type OutboxKind,
   type ScheduledInfo,
   type SendInput,
   type Settings
@@ -24,6 +25,10 @@ export interface Snoozed {
 /** A message waiting to be sent at `sendAt`. Attachments are copies kept in the outbox folder. */
 export interface Scheduled extends ScheduledInfo {
   input: SendInput
+  /** Missing on items saved before undo send existed, which are all scheduled. */
+  kind?: OutboxKind
+  /** An undo-send message that failed; it waits here until Compose takes it back. */
+  failed?: boolean
 }
 
 /** Secret slot for the Claude API key, next to the account secrets. */

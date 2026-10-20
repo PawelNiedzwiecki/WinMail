@@ -12,7 +12,6 @@ import type Mail from 'nodemailer/lib/mailer'
 import { simpleParser, type AddressObject, type HeaderLines } from 'mailparser'
 import { randomUUID } from 'crypto'
 import { mkdir, writeFile } from 'fs/promises'
-import { tmpdir } from 'os'
 import { basename, join } from 'path'
 import type {
   Account,
@@ -35,6 +34,7 @@ import { getProvider } from '../shared/providers'
 import type { Snoozed, Store } from './store'
 import { decodeCharset, decodeTransfer, htmlToText, makePreview } from './text'
 import { GoogleTokens, REAUTH_MESSAGE, signIn as googleSignIn } from './google'
+import { TEMP_ROOT } from './attachments'
 
 /** Either a password or an OAuth access token (XOAUTH2). */
 export type Creds = Pick<Account, 'imap' | 'smtp' | 'username'> & { password?: string; accessToken?: string }
@@ -204,11 +204,48 @@ async function compile(mail: Mail.Options, keepBcc: boolean): Promise<Buffer> {
   return node.build()
 }
 
+const IMAGE_EXT: Record<string, string> = { 'image/jpeg': 'jpg', 'image/svg+xml': 'svg' }
+
+/**
+ * Pasted images arrive as `data:` URLs, which many mail apps don't show. Turns them into
+ * inline parts referenced by `cid:`, as nodemailer's transport would (MailComposer doesn't).
+ */
+function inlineImages(html: string): { html: string; parts: Mail.Attachment[] } {
+  const parts: Mail.Attachment[] = []
+  const out = html.replace(
+    /(<img\b[^>]*?\ssrc\s*=\s*)(["'])data:(image\/\w+);base64,([^"']*)\2/gi,
+    (_m, pre: string, q: string, type: string, data: string) => {
+      const cid = `${randomUUID()}@winmail`
+      const ext = IMAGE_EXT[type.toLowerCase()] ?? type.split('/')[1]!.replace(/\W.*$/, '')
+      parts.push({
+        cid,
+        filename: `image-${parts.length + 1}.${ext}`,
+        contentType: type,
+        content: Buffer.from(data, 'base64'),
+        contentDisposition: 'inline'
+      })
+      return `${pre}${q}cid:${cid}${q}`
+    }
+  )
+  return { html: out, parts }
+}
+
 /** Previews kept in memory; oldest are dropped first. */
 const MAX_PREVIEWS = 5000
 
 /** How long to stay in another folder before re-selecting the inbox so IDLE watches it. */
 const INBOX_RETURN_MS = 3000
+
+/** The second connection used for uploads closes after this long without work. */
+const UPLOAD_IDLE_MS = 60_000
+
+/** A second IMAP connection for draft saves and Sent copies; see `withUpload`. */
+interface Upload {
+  client: Promise<ImapFlow>
+  /** Operations running on it now; the idle timer starts when this drops to zero. */
+  active: number
+  idle?: NodeJS.Timeout
+}
 
 export class MailService {
   private clients = new Map<string, ImapFlow>()
@@ -222,6 +259,9 @@ export class MailService {
   private lastSource: { key: string; source: Buffer } | null = null
   /** Highest inbox UID already announced per account|uidValidity, for new-mail notifications. */
   private announced = new Map<string, number>()
+  private uploads = new Map<string, Upload>()
+  /** Old draft versions that could not be removed yet, retried with the account's next draft change. */
+  private staleDrafts = new Map<string, Set<number>>()
   private tokens = new GoogleTokens()
 
   constructor(
@@ -283,6 +323,12 @@ export class MailService {
     clearTimeout(this.inboxTimers.get(accountId))
     this.inboxTimers.delete(accountId)
     if (this.lastSource?.key.startsWith(`${accountId}|`)) this.lastSource = null
+    const upload = this.uploads.get(accountId)
+    this.uploads.delete(accountId)
+    if (upload) {
+      clearTimeout(upload.idle)
+      void upload.client.then((u) => u.logout()).catch(() => {})
+    }
     try {
       await c?.logout()
     } catch {
@@ -291,7 +337,52 @@ export class MailService {
   }
 
   async disconnectAll(): Promise<void> {
-    await Promise.all([...this.clients.keys()].map((id) => this.disconnect(id)))
+    const ids = new Set([...this.clients.keys(), ...this.uploads.keys()])
+    await Promise.all([...ids].map((id) => this.disconnect(id)))
+  }
+
+  /**
+   * Runs `fn` on a second connection, used for draft saves and Sent copies. Uploads can be
+   * large and drafts are saved often; on the main connection they would block reading mail
+   * and move IDLE off the inbox. The connection closes after a minute without work.
+   */
+  private async withUpload<T>(accountId: string, fn: (c: ImapFlow) => Promise<T>): Promise<T> {
+    let u = this.uploads.get(accountId)
+    if (u && !(await u.client.then((c) => c.usable, () => false))) {
+      if (this.uploads.get(accountId) === u) this.uploads.delete(accountId)
+      u = undefined
+    }
+    if (!u) {
+      u = { client: this.connectUpload(accountId), active: 0 }
+      this.uploads.set(accountId, u)
+    }
+    const entry = u
+    clearTimeout(entry.idle)
+    entry.active++
+    try {
+      return await fn(await entry.client)
+    } finally {
+      entry.active--
+      if (!entry.active) {
+        entry.idle = setTimeout(() => {
+          if (this.uploads.get(accountId) === entry) this.uploads.delete(accountId)
+          void entry.client.then((c) => c.logout()).catch(() => {})
+        }, UPLOAD_IDLE_MS)
+      }
+    }
+  }
+
+  private async connectUpload(accountId: string): Promise<ImapFlow> {
+    const acc = this.store.getAccount(accountId)
+    const c = imapClient(await this.creds(acc))
+    c.on('error', (err) => console.error(`[imap upload ${acc.email}]`, err.message))
+    try {
+      await c.connect()
+    } catch (err) {
+      if (isAuthError(err)) this.tokens.forget(accountId)
+      throw new Error(friendlyError(err, acc.auth === 'oauth'))
+    }
+    return c
   }
 
   private async withMailbox<T>(accountId: string, path: string, fn: (c: ImapFlow) => Promise<T>) {
@@ -814,6 +905,7 @@ export class MailService {
 
   /** One Message-ID and Date so the sent message and its saved copy match. */
   private mailOptions(acc: Account, input: SendInput): Mail.Options {
+    const inline = input.html ? inlineImages(input.html) : null
     return {
       from: { name: acc.name, address: acc.email },
       to: input.to || undefined,
@@ -821,16 +913,22 @@ export class MailService {
       bcc: input.bcc || undefined,
       subject: input.subject,
       text: input.text,
-      html: input.html || undefined,
-      attachments: input.attachments?.map((a) => ({ filename: a.filename, path: a.path })),
+      html: inline?.html || undefined,
+      attachments: [
+        ...(input.attachments ?? []).map((a) => ({ filename: a.filename, path: a.path })),
+        ...(inline?.parts ?? [])
+      ],
       inReplyTo: input.inReplyTo,
       references: input.references,
       messageId: `<${randomUUID()}@${acc.email.split('@')[1] ?? 'winmail'}>`,
-      date: new Date()
+      date: new Date(),
+      // Attachments are local files only; never let a path fetch a URL.
+      disableUrlAccess: true
     }
   }
 
-  async send(input: SendInput): Promise<void> {
+  /** `delivered` runs as soon as the server has accepted the message, before the Sent copy and draft clean-up. */
+  async send(input: SendInput, delivered?: () => void): Promise<void> {
     const acc = this.store.getAccount(input.accountId)
     const creds = await this.creds(acc)
     const mail = this.mailOptions(acc, input)
@@ -844,40 +942,118 @@ export class MailService {
     } finally {
       transport.close()
     }
+    delivered?.()
 
     if (!getProvider(acc.provider).serverSavesSent) {
       const sent = await this.specialPath(acc.id, 'sent')
       if (sent) {
         try {
-          const c = await this.client(acc.id)
-          await c.append(sent, input.bcc ? await compile(mail, true) : raw, ['\\Seen'])
+          const copy = input.bcc ? await compile(mail, true) : raw
+          await this.withUpload(acc.id, (c) => c.append(sent, copy, ['\\Seen']))
         } catch (err) {
           console.error('Could not save to Sent:', err)
         }
       }
     }
-    if (input.draftUid) {
-      await this.deleteDraft(acc.id, input.draftUid).catch((err) => console.error('Could not delete draft:', err))
-    }
+    if (input.draftUid) await this.removeDrafts(acc.id, [input.draftUid], true)
   }
 
   async saveDraft(input: SendInput): Promise<number | null> {
     const acc = this.store.getAccount(input.accountId)
     const drafts = await this.specialPath(acc.id, 'drafts')
-    if (!drafts) throw new Error('This account has no Drafts mailbox.')
-    const raw = await compile(this.mailOptions(acc, input), true)
-    const c = await this.client(acc.id)
-    const res = await c.append(drafts, raw, ['\\Draft', '\\Seen'])
-    if (input.draftUid) {
-      await this.deleteDraft(acc.id, input.draftUid).catch((err) => console.error('Could not replace draft:', err))
+    if (!drafts) {
+      throw new Error(
+        acc.provider === 'gmail'
+          ? "Drafts can't be saved: turn on \"Show in IMAP\" for Drafts in Gmail's settings (Labels)."
+          : "Drafts can't be saved: this account has no Drafts folder."
+      )
     }
-    return res && res.uid ? res.uid : null
+    const mail = this.mailOptions(acc, input)
+    const raw = await compile(mail, true)
+    const uid = await this.withUpload(acc.id, async (c) => {
+      const res = await c.append(drafts, raw, ['\\Draft', '\\Seen'])
+      if (res && res.uid) return res.uid
+      // Without UIDPLUS the server doesn't say; find the copy by the Message-ID it was just given.
+      // The message is stored by now, so a failed lookup must not fail the save (a retry would add a copy).
+      try {
+        const lock = await c.getMailboxLock(drafts)
+        try {
+          const found = (await c.search({ header: { 'message-id': String(mail.messageId) } }, { uid: true })) || []
+          return found.length ? Math.max(...found) : null
+        } finally {
+          lock.release()
+        }
+      } catch (err) {
+        console.error('[imap] could not look up the saved draft:', err instanceof Error ? err.message : err)
+        return null
+      }
+    })
+    if (input.draftUid) await this.removeDrafts(acc.id, [input.draftUid], true)
+    return uid
   }
 
   async deleteDraft(accountId: string, uid: number): Promise<void> {
-    const drafts = await this.specialPath(accountId, 'drafts')
-    if (!drafts) return
-    await this.withMailbox(accountId, drafts, (c) => c.messageDelete(String(uid), { uid: true }))
+    await this.removeDrafts(accountId, [uid], false)
+  }
+
+  /**
+   * Deletes draft versions, plus any earlier ones that failed to go. On Gmail a plain expunge
+   * only removes the Drafts label and the old version stays in All Mail, so drafts take a detour
+   * through Trash and are deleted there. `quiet` keeps failures for the next try instead of throwing.
+   */
+  private async removeDrafts(accountId: string, uids: number[], quiet: boolean): Promise<void> {
+    const acc = this.store.listAccounts().find((a) => a.id === accountId)
+    if (!acc) {
+      this.staleDrafts.delete(accountId)
+      return
+    }
+    const all = [...new Set([...uids, ...(this.staleDrafts.get(accountId) ?? [])])]
+    if (!acc.enabled) {
+      // Never connect for a disabled account; try again once it is back.
+      this.staleDrafts.set(accountId, new Set(all))
+      return
+    }
+    try {
+      const drafts = await this.specialPath(accountId, 'drafts')
+      if (!drafts || !all.length) return
+      const trash = acc.provider === 'gmail' ? await this.specialPath(accountId, 'trash') : undefined
+      await this.withUpload(accountId, async (c) => {
+        let inTrash: number[] = []
+        const lock = await c.getMailboxLock(drafts)
+        try {
+          if (trash) {
+            const res = await c.messageMove(all.join(','), trash, { uid: true })
+            if (!res) throw new Error('The server refused to remove the old draft.')
+            inTrash = all.map((u) => res.uidMap?.get(u)).filter((u): u is number => u !== undefined)
+          } else if (c.capabilities.has('UIDPLUS')) {
+            if (!(await c.messageDelete(all.join(','), { uid: true }))) {
+              throw new Error('The server refused to remove the old draft.')
+            }
+          } else {
+            // Plain EXPUNGE would also remove messages other apps flagged but kept; expunge only when all flagged are ours.
+            await c.messageFlagsAdd(all.join(','), ['\\Deleted'], { uid: true })
+            const flagged = (await c.search({ deleted: true }, { uid: true })) || []
+            if (flagged.every((u) => all.includes(u))) await c.messageDelete(all.join(','), { uid: true })
+          }
+        } finally {
+          // One lock at a time per connection: Trash is locked only after Drafts is released.
+          lock.release()
+        }
+        if (trash && inTrash.length) {
+          const t = await c.getMailboxLock(trash)
+          try {
+            await c.messageDelete(inTrash.join(','), { uid: true })
+          } finally {
+            t.release()
+          }
+        }
+      })
+      this.staleDrafts.delete(accountId)
+    } catch (err) {
+      this.staleDrafts.set(accountId, new Set(all))
+      if (!quiet) throw err
+      console.error('[imap] could not remove old draft:', err instanceof Error ? err.message : err)
+    }
   }
 
   /** A saved message as Compose input; attachments go to temporary files. */
@@ -888,7 +1064,7 @@ export class MailService {
       return m.source
     })
     const p = await simpleParser(source)
-    const dir = join(tmpdir(), 'winmail', randomUUID())
+    const dir = join(TEMP_ROOT, randomUUID())
     const attachments: OutgoingAttachment[] = []
     for (const [i, a] of p.attachments.entries()) {
       if (a.related) continue

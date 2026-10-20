@@ -3,6 +3,9 @@ import type { WinMailApi } from '../shared/types'
 
 const mica = process.argv.includes('--winmail-mica=1')
 
+/** Pasted images bigger than this have to be attached as files instead; matches main. */
+const MAX_PASTE_BYTES = 25 * 1024 * 1024
+
 window.addEventListener('DOMContentLoaded', () => {
   if (mica) document.documentElement.classList.add('has-mica')
 })
@@ -56,7 +59,20 @@ const api: WinMailApi = {
 
   pickAttachments: () => call('compose:pickAttachments'),
   pathForFile: (file) => webUtils.getPathForFile(file),
+  addDroppedFiles: async (files) => {
+    // A page can pass any object; only a real array is copied into this world, and every
+    // element must be a genuine File or getPathForFile throws.
+    if (!Array.isArray(files)) throw new TypeError('Expected a list of files.')
+    return call('compose:addFiles', Array.from(files, (f) => webUtils.getPathForFile(f)))
+  },
+  saveClipboardImage: async (file) => {
+    if (file.size > MAX_PASTE_BYTES) throw new Error('This image is too large to paste. Attach it as a file instead.')
+    return call('compose:saveImage', file.name || 'image.png', new Uint8Array(await file.arrayBuffer()))
+  },
   send: (input) => call('mail:send', input),
+  queueSend: (input) => call('outbox:queue', input),
+  takeFailedSends: () => call('outbox:takeFailed'),
+  onOutbox: (cb) => on('outbox:event', cb),
   saveDraft: (input) => call('mail:saveDraft', input),
   deleteDraft: (id, uid) => call('mail:deleteDraft', id, uid),
   openDraft: (id, path, uid) => call('mail:openDraft', id, path, uid),
@@ -75,7 +91,11 @@ const api: WinMailApi = {
 
   onMailChanged: (cb) => on('mail:changed', cb),
   onMailProgress: (cb) => on('mail:progress', cb),
-  onOpenMessage: (cb) => on('mail:open', cb)
+  onOpenMessage: (cb) => on('mail:open', cb),
+
+  showEmojiPanel: () => ipcRenderer.send('app:emoji'),
+  onCloseRequested: (cb) => on('app:close-requested', cb),
+  closeReady: () => ipcRenderer.send('app:close-ready')
 }
 
 contextBridge.exposeInMainWorld('winmail', api)

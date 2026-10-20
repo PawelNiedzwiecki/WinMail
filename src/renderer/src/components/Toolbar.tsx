@@ -10,7 +10,9 @@ import {
   Search,
   Mail,
   MailOpen,
-  RefreshCw
+  RefreshCw,
+  FolderInput,
+  AlarmClock
 } from 'lucide-react'
 import type { ReactNode } from 'react'
 
@@ -26,6 +28,10 @@ interface Props {
   onArchive: () => void
   onTrash: () => void
   onJunk: () => void
+  onMove: () => void
+  onSnooze: () => void
+  /** Move to… needs all selected messages in one account. */
+  canMove: boolean
   onReply: () => void
   onReplyAll: () => void
   onForward: () => void
@@ -54,6 +60,12 @@ export function Toolbar(p: Props) {
         </TbButton>
         <TbButton title="Move to Junk" disabled={d} onClick={p.onJunk}>
           <ShieldAlert size={17} />
+        </TbButton>
+        <TbButton title="Move to…" disabled={d || !p.canMove} onClick={p.onMove}>
+          <FolderInput size={17} />
+        </TbButton>
+        <TbButton title="Snooze" disabled={d} onClick={p.onSnooze}>
+          <AlarmClock size={17} />
         </TbButton>
       </div>
       <div className="tb-group">

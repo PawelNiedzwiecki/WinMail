@@ -1,4 +1,5 @@
 import {
+  AlarmClock,
   Inbox,
   Flag,
   File,
@@ -12,6 +13,7 @@ import {
   Settings,
   Plus,
   TriangleAlert,
+  Clock,
   type LucideIcon
 } from 'lucide-react'
 import { useState, type ReactNode } from 'react'
@@ -27,7 +29,8 @@ const ICONS: Record<SpecialUse, LucideIcon> = {
   trash: Trash2,
   archive: Archive,
   all: Mails,
-  flagged: Flag
+  flagged: Flag,
+  snoozed: AlarmClock
 }
 
 /** Mailboxes where an unread count is useful. */
@@ -41,6 +44,11 @@ interface Props {
   onSelect: (s: Selection) => void
   onOpenSettings: () => void
   onAddAccount: () => void
+  /** Messages waiting for Schedule send; the Scheduled entry shows while there are any. */
+  scheduledCount: number
+  onOpenScheduled: () => void
+  /** Right-click on a mailbox. */
+  onMailboxMenu: (accountId: string, path: string, x: number, y: number) => void
 }
 
 export function inboxPath(boxes: MailboxInfo[] | undefined): string {
@@ -117,9 +125,13 @@ export function Sidebar(p: Props) {
                     count={box?.unseen}
                     selected={isSel(a.id, path)}
                     onClick={() => p.onSelect({ kind: 'mailbox', accountId: a.id, path })}
+                    onContextMenu={(x, y) => p.onMailboxMenu(a.id, path, x, y)}
                   />
                 )
               })}
+            {p.scheduledCount > 0 && (
+              <Item icon={Clock} label="Scheduled" count={p.scheduledCount} selected={false} onClick={p.onOpenScheduled} />
+            )}
           </Section>
         )}
 
@@ -141,6 +153,7 @@ export function Sidebar(p: Props) {
                 count={COUNTED.has(b.specialUse) ? b.unseen : 0}
                 selected={isSel(a.id, b.path)}
                 onClick={() => p.onSelect({ kind: 'mailbox', accountId: a.id, path: b.path })}
+                onContextMenu={(x, y) => p.onMailboxMenu(a.id, b.path, x, y)}
               />
             ))}
           </Section>
@@ -166,6 +179,7 @@ function Item(props: {
   selected: boolean
   onClick: () => void
   expander?: { open: boolean; onToggle: () => void }
+  onContextMenu?: (x: number, y: number) => void
 }) {
   const Icon = props.icon
   return (
@@ -173,6 +187,11 @@ function Item(props: {
       className={`sb-item ${props.selected ? 'is-selected' : ''}`}
       style={{ paddingLeft: 8 + (props.depth ?? 0) * 16 }}
       onClick={props.onClick}
+      onContextMenu={(e) => {
+        if (!props.onContextMenu) return
+        e.preventDefault()
+        props.onContextMenu(e.clientX, e.clientY)
+      }}
     >
       <Icon size={16} strokeWidth={1.8} className="sb-icon" />
       <span className="sb-label">{props.label}</span>

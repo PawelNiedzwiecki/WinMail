@@ -9,6 +9,9 @@ window.addEventListener('keydown', (e) => {
   stack[stack.length - 1]!.current()
 })
 
+/** True while a dialog or popup waits for Escape; compose cards leave Escape to it. */
+export const hasEscapeLayer = () => stack.length > 0
+
 export function useEscape(onClose: () => void, enabled = true): void {
   const ref = useRef(onClose)
   ref.current = onClose

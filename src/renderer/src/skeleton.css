@@ -1,0 +1,37 @@
+/* Placeholder for a message body while it loads, so the pane doesn't jump when the text arrives. */
+.msg-skeleton {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  /* Roughly the height of a short message, so what follows moves little. */
+  min-height: 260px;
+  padding: 22px 0 8px;
+}
+.msg-skeleton-gap {
+  height: 10px;
+}
+.skel-line {
+  height: 12px;
+  border-radius: 6px;
+  background: linear-gradient(
+    90deg,
+    var(--input-bg) 0%,
+    color-mix(in srgb, var(--text) 12%, transparent) 50%,
+    var(--input-bg) 100%
+  );
+  background-size: 200% 100%;
+  animation: skel-shimmer 1.4s ease-in-out infinite;
+}
+@keyframes skel-shimmer {
+  from {
+    background-position: 100% 0;
+  }
+  to {
+    background-position: -100% 0;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .skel-line {
+    animation: none;
+  }
+}

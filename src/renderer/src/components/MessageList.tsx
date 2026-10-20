@@ -1,5 +1,5 @@
 import { Flag, Paperclip } from 'lucide-react'
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, type ReactNode, type UIEvent } from 'react'
 import type { MessageSummary } from '@shared/types'
 import { formatListDate } from '../format'
 
@@ -16,7 +16,17 @@ interface Props {
   accountLabels?: Record<string, string>
   /** Older messages exist on the server beyond what is loaded. */
   hasMore?: boolean
-  onSelect: (key: string) => void
+  /** Messages with a reply being written, tagged "Draft". */
+  draftKeys?: Set<string>
+  /** Messages picked with Ctrl or Shift, besides the selected one. */
+  checkedKeys?: Set<string>
+  /** Message key -> messages in its conversation, when more than one. */
+  threadCounts?: Map<string, number>
+  /** Tabs above the list, e.g. Gmail inbox categories. */
+  tabs?: ReactNode
+  onSelect: (key: string, mods?: { toggle: boolean; range: boolean }) => void
+  /** Double-click or Enter on a row. */
+  onOpen?: (key: string) => void
   /** Right-click on a row; the row is selected first. */
   onContextMenu?: (key: string, x: number, y: number) => void
   onLoadMore?: () => void
@@ -30,6 +40,12 @@ export function MessageList(p: Props) {
     selectedRef.current?.scrollIntoView({ block: 'nearest' })
   }, [p.selectedKey])
 
+  // Older messages load on their own as the end of the list comes into view.
+  const onScroll = (e: UIEvent<HTMLDivElement>) => {
+    const el = e.currentTarget
+    if (p.hasMore && !p.loading && el.scrollHeight - el.scrollTop - el.clientHeight < 200) p.onLoadMore?.()
+  }
+
   return (
     <section className="list">
       <header className="list-header">
@@ -39,8 +55,9 @@ export function MessageList(p: Props) {
           {p.messages.length} {p.messages.length === 1 ? 'message' : 'messages'}{unread ? `, ${unread} unread` : ''}
         </span>
       </header>
+      {p.tabs}
       {p.error && <div className="list-error">{p.error}</div>}
-      <div className="list-scroll" role="listbox">
+      <div className="list-scroll" role="listbox" aria-multiselectable onScroll={onScroll}>
         {p.loading && p.messages.length === 0 && (
           <div className="list-empty list-loading">
             <span className="spinner" />
@@ -51,19 +68,21 @@ export function MessageList(p: Props) {
           <div className="list-empty">No messages</div>
         )}
         {p.messages.map((m) => {
-          const selected = m.key === p.selectedKey
+          const selected = m.key === p.selectedKey || !!p.checkedKeys?.has(m.key)
+          const count = p.threadCounts?.get(m.key)
           return (
             <button
               key={m.key}
-              ref={selected ? selectedRef : undefined}
+              ref={m.key === p.selectedKey ? selectedRef : undefined}
               role="option"
               aria-selected={selected}
               className={`row ${selected ? 'is-selected' : ''} ${m.seen ? '' : 'is-unread'}`}
-              onClick={() => p.onSelect(m.key)}
+              onClick={(e) => p.onSelect(m.key, { toggle: e.ctrlKey || e.metaKey, range: e.shiftKey })}
+              onDoubleClick={() => p.onOpen?.(m.key)}
               onContextMenu={(e) => {
                 if (!p.onContextMenu) return
                 e.preventDefault()
-                p.onSelect(m.key)
+                if (!selected) p.onSelect(m.key)
                 p.onContextMenu(m.key, e.clientX, e.clientY)
               }}
             >
@@ -73,7 +92,11 @@ export function MessageList(p: Props) {
               </div>
               <div className="row-main">
                 <div className="row-top">
-                  <span className="row-from">{m.from.name || m.from.email}</span>
+                  <span className="row-from">
+                    {m.from.name || m.from.email}
+                    {count ? <span className="row-count">{count}</span> : null}
+                    {p.draftKeys?.has(m.key) && <span className="row-draft">Draft</span>}
+                  </span>
                   <span className="row-date">{formatListDate(m.date)}</span>
                 </div>
                 <div className="row-subject">
