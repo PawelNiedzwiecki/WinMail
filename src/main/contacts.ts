@@ -99,7 +99,8 @@ export class Contacts {
       saved: c.bookSaved,
       fromMail: c.mail.length,
       error: c.bookError,
-      loading: !this.scanned.has(accountId)
+      // A paused account is never scanned, so it would otherwise read "loading" forever.
+      loading: !this.scanned.has(accountId) && !!this.store.listAccounts().find((a) => a.id === accountId)?.enabled
     }
   }
 
