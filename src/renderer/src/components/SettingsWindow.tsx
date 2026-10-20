@@ -5,6 +5,7 @@ import {
   Keyboard,
   Monitor,
   Moon,
+  Palette,
   PenLine,
   Plus,
   SlidersHorizontal,
@@ -24,7 +25,7 @@ import { ProviderLogo } from './ProviderLogo'
 import { Select } from './Select'
 import { Group, Item, KeyRow, Segmented, Switch } from './settings/controls'
 
-export type SettingsTab = 'general' | 'composing' | 'shortcuts' | 'ai' | 'accounts'
+export type SettingsTab = 'general' | 'appearance' | 'composing' | 'shortcuts' | 'ai' | 'accounts'
 
 interface Props {
   tab: SettingsTab
@@ -39,6 +40,7 @@ interface Props {
 
 const PAGES: { id: SettingsTab; label: string; icon: LucideIcon }[] = [
   { id: 'general', label: 'General', icon: SlidersHorizontal },
+  { id: 'appearance', label: 'Appearance', icon: Palette },
   { id: 'composing', label: 'Composing', icon: PenLine },
   { id: 'shortcuts', label: 'Shortcuts', icon: Keyboard },
   { id: 'ai', label: 'Claude', icon: Sparkles },
@@ -74,6 +76,7 @@ export function SettingsWindow(p: Props) {
           </header>
           <div className="st-scroll">
             {page.id === 'general' && <GeneralPage settings={p.settings} onChange={p.onSettings} />}
+            {page.id === 'appearance' && <AppearancePage settings={p.settings} onChange={p.onSettings} />}
             {page.id === 'composing' && (
               <ComposingPage settings={p.settings} onChange={p.onSettings} onAccounts={() => p.onTab('accounts')} />
             )}
@@ -97,48 +100,8 @@ interface PageProps {
 function GeneralPage({ settings, onChange }: PageProps) {
   return (
     <>
-      <Group title="Appearance">
-        <Item title="Theme" description="Choose how WinMail looks.">
-          <Segmented<Appearance>
-            label="Theme"
-            value={settings.appearance}
-            onChange={(appearance) => onChange({ ...settings, appearance })}
-            options={[
-              { value: 'system', label: 'System', icon: <Monitor size={14} /> },
-              { value: 'light', label: 'Light', icon: <Sun size={14} /> },
-              { value: 'dark', label: 'Dark', icon: <Moon size={14} /> }
-            ]}
-          />
-        </Item>
-        <Item
-          title="Message content"
-          description="Dark inverts the message's colours; photos keep their original colours."
-        >
-          <Segmented<MessageAppearance>
-            label="Message content"
-            value={settings.messageAppearance}
-            onChange={(messageAppearance) => onChange({ ...settings, messageAppearance })}
-            options={[
-              { value: 'light', label: 'Light' },
-              { value: 'dark', label: 'Dark' },
-              { value: 'app', label: 'Same as app' }
-            ]}
-          />
-        </Item>
-        <Item
-          title="Reduce animations"
-          description="Skip movement and fades. WinMail also follows Windows' Animation effects setting."
-        >
-          <Switch
-            label="Reduce animations"
-            checked={settings.reduceMotion}
-            onChange={(reduceMotion) => onChange({ ...settings, reduceMotion })}
-          />
-        </Item>
-      </Group>
-
       <Group title="New mail">
-        <Item title="Check for new messages" description="How often WinMail looks for new mail.">
+        <Item title="Check for new messages" description="How often WinMail looks for mail.">
           <Select
             aria-label="Check for new messages"
             value={String(settings.checkIntervalMin)}
@@ -153,7 +116,7 @@ function GeneralPage({ settings, onChange }: PageProps) {
             ]}
           />
         </Item>
-        <Item title="Notifications" description="Show a notification about new mail while WinMail is in the background.">
+        <Item title="Notifications" description="Notify me about new mail while WinMail is in the background.">
           <Switch
             label="Notify me about new mail"
             checked={settings.notifyNewMail}
@@ -162,11 +125,81 @@ function GeneralPage({ settings, onChange }: PageProps) {
         </Item>
       </Group>
 
-      <Group title="Message list">
+      <Group title="Inbox">
+        <Item title="Group by conversation" description="Show replies together under one entry.">
+          <Switch
+            label="Group messages by conversation"
+            checked={settings.conversations}
+            onChange={(conversations) => onChange({ ...settings, conversations })}
+          />
+        </Item>
         <Item
-          title="Layout"
-          description="Compact shows each message on one line with just the sender, title and date. Comfortable also shows the start of the message."
+          title="Inbox categories"
+          description="Primary, Social, Promotions and more. Non-Google accounts are sorted by WinMail and may be wrong."
         >
+          <Switch
+            label="Show inbox categories"
+            checked={settings.inboxCategories}
+            onChange={(inboxCategories) => onChange({ ...settings, inboxCategories })}
+          />
+        </Item>
+        <Item title="Confirm before deleting" description="Ask before moving messages to the Bin.">
+          <Switch
+            label="Confirm before deleting"
+            checked={settings.confirmDelete}
+            onChange={(confirmDelete) => onChange({ ...settings, confirmDelete })}
+          />
+        </Item>
+      </Group>
+
+      <Group title="Privacy">
+        <Item
+          title="Load remote images"
+          description="Senders can see when and where you opened a message. You can still load them per message."
+        >
+          <Switch
+            label="Load remote content in messages"
+            checked={settings.loadRemoteContent}
+            onChange={(loadRemoteContent) => onChange({ ...settings, loadRemoteContent })}
+          />
+        </Item>
+      </Group>
+    </>
+  )
+}
+
+function AppearancePage({ settings, onChange }: PageProps) {
+  return (
+    <>
+      <Group title="Theme">
+        <Item title="App theme" description="Choose how WinMail looks.">
+          <Segmented<Appearance>
+            label="Theme"
+            value={settings.appearance}
+            onChange={(appearance) => onChange({ ...settings, appearance })}
+            options={[
+              { value: 'system', label: 'System', icon: <Monitor size={14} /> },
+              { value: 'light', label: 'Light', icon: <Sun size={14} /> },
+              { value: 'dark', label: 'Dark', icon: <Moon size={14} /> }
+            ]}
+          />
+        </Item>
+        <Item title="Message content" description="Dark inverts message colours; photos stay as they are.">
+          <Segmented<MessageAppearance>
+            label="Message content"
+            value={settings.messageAppearance}
+            onChange={(messageAppearance) => onChange({ ...settings, messageAppearance })}
+            options={[
+              { value: 'light', label: 'Light' },
+              { value: 'dark', label: 'Dark' },
+              { value: 'app', label: 'Same as app' }
+            ]}
+          />
+        </Item>
+      </Group>
+
+      <Group title="Message list">
+        <Item title="Layout" description="Compact is one line per message; Comfortable adds a preview.">
           <Segmented<ListDensity>
             label="List layout"
             value={settings.listDensity}
@@ -178,7 +211,7 @@ function GeneralPage({ settings, onChange }: PageProps) {
           />
         </Item>
         {settings.listDensity === 'comfortable' && (
-          <Item title="Preview length" description="Lines of message text shown under the title.">
+          <Item title="Preview length" description="Lines of text shown under the title.">
             <Select
               aria-label="Preview length"
               value={String(settings.listPreviewLines || 2)}
@@ -191,41 +224,14 @@ function GeneralPage({ settings, onChange }: PageProps) {
             />
           </Item>
         )}
-        <Item title="Group by conversation" description="Show replies together under one entry.">
-          <Switch
-            label="Group messages by conversation"
-            checked={settings.conversations}
-            onChange={(conversations) => onChange({ ...settings, conversations })}
-          />
-        </Item>
-        <Item title="Inbox categories" description="Show Primary, Social, Promotions, Updates and Forums tabs above the inbox. Google accounts use Gmail's own sorting; other accounts are sorted by WinMail from the sender and message headers, so it can get one wrong.">
-          <Switch
-            label="Show inbox categories"
-            checked={settings.inboxCategories}
-            onChange={(inboxCategories) => onChange({ ...settings, inboxCategories })}
-          />
-        </Item>
       </Group>
 
-      <Group title="Deleting">
-        <Item title="Confirm before deleting" description="Ask for confirmation before moving messages to the Bin.">
+      <Group title="Motion">
+        <Item title="Reduce animations" description="Skip movement and fades. Also follows Windows' animation setting.">
           <Switch
-            label="Confirm before deleting"
-            checked={settings.confirmDelete}
-            onChange={(confirmDelete) => onChange({ ...settings, confirmDelete })}
-          />
-        </Item>
-      </Group>
-
-      <Group title="Privacy">
-        <Item
-          title="Load remote images"
-          description="Remote images can tell senders when and where you opened a message. You can still load them for one message."
-        >
-          <Switch
-            label="Load remote content in messages"
-            checked={settings.loadRemoteContent}
-            onChange={(loadRemoteContent) => onChange({ ...settings, loadRemoteContent })}
+            label="Reduce animations"
+            checked={settings.reduceMotion}
+            onChange={(reduceMotion) => onChange({ ...settings, reduceMotion })}
           />
         </Item>
       </Group>
