@@ -1,0 +1,228 @@
+import {
+  Inbox,
+  Flag,
+  File,
+  Send,
+  ShieldAlert,
+  Trash2,
+  Archive,
+  Folder,
+  Mails,
+  ChevronDown,
+  Settings,
+  Plus,
+  TriangleAlert,
+  type LucideIcon
+} from 'lucide-react'
+import { useState, type ReactNode } from 'react'
+import type { Account, MailboxInfo, SpecialUse } from '@shared/types'
+
+export type Selection = { kind: 'all-inboxes' } | { kind: 'mailbox'; accountId: string; path: string }
+
+const ICONS: Record<SpecialUse, LucideIcon> = {
+  inbox: Inbox,
+  drafts: File,
+  sent: Send,
+  junk: ShieldAlert,
+  trash: Trash2,
+  archive: Archive,
+  all: Mails,
+  flagged: Flag
+}
+
+/** Mailboxes where an unread count is useful. */
+const COUNTED = new Set<SpecialUse | null>(['inbox', 'junk', null])
+
+interface Props {
+  accounts: Account[]
+  mailboxes: Record<string, MailboxInfo[]>
+  errors: Record<string, string>
+  selection: Selection
+  onSelect: (s: Selection) => void
+  onOpenSettings: () => void
+  onAddAccount: () => void
+}
+
+export function inboxPath(boxes: MailboxInfo[] | undefined): string {
+  return boxes?.find((b) => b.specialUse === 'inbox')?.path ?? 'INBOX'
+}
+
+export function Sidebar(p: Props) {
+  const [collapsed, setCollapsed] = useState<Record<string, boolean>>({})
+  const toggle = (k: string) => setCollapsed((c) => ({ ...c, [k]: !c[k] }))
+  const enabled = p.accounts.filter((a) => a.enabled)
+
+  const isSel = (accountId: string, path: string) =>
+    p.selection.kind === 'mailbox' &&
+    p.selection.accountId === accountId &&
+    p.selection.path === path
+
+  const totalInbox = enabled.reduce((n, a) => {
+    const box = p.mailboxes[a.id]?.find((b) => b.specialUse === 'inbox')
+    return n + (box?.unseen ?? 0)
+  }, 0)
+
+  return (
+    <aside className="sidebar">
+      <div className="sidebar-drag">
+        <div className="brand">
+          <svg className="brand-mark" viewBox="0 0 256 256" aria-hidden>
+            <defs>
+              <linearGradient id="brand-tile" x1="0" y1="0" x2="0.35" y2="1">
+                <stop offset="0" stopColor="#52B4FF" />
+                <stop offset="1" stopColor="#0A5BD3" />
+              </linearGradient>
+            </defs>
+            <rect x="8" y="8" width="240" height="240" rx="56" fill="url(#brand-tile)" />
+            <rect x="42" y="72" width="172" height="120" rx="16" fill="#fff" />
+            <path
+              d="M52 84l76 58 76-58"
+              fill="none"
+              stroke="#0A5BD3"
+              strokeOpacity="0.6"
+              strokeWidth="14"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+          </svg>
+          <span className="brand-name">Winmail</span>
+        </div>
+      </div>
+      <nav className="sb-scroll">
+        {enabled.length > 0 && (
+          <Section title="Favourites" open={!collapsed.fav} onToggle={() => toggle('fav')}>
+            <Item
+              icon={Inbox}
+              label="Inbox"
+              count={totalInbox}
+              selected={p.selection.kind === 'all-inboxes'}
+              onClick={() => p.onSelect({ kind: 'all-inboxes' })}
+              expander={
+                enabled.length > 1
+                  ? { open: !collapsed.inboxes, onToggle: () => toggle('inboxes') }
+                  : undefined
+              }
+            />
+            {enabled.length > 1 &&
+              !collapsed.inboxes &&
+              enabled.map((a) => {
+                const path = inboxPath(p.mailboxes[a.id])
+                const box = p.mailboxes[a.id]?.find((b) => b.path === path)
+                return (
+                  <Item
+                    key={a.id}
+                    icon={Inbox}
+                    label={a.description}
+                    depth={1}
+                    count={box?.unseen}
+                    selected={isSel(a.id, path)}
+                    onClick={() => p.onSelect({ kind: 'mailbox', accountId: a.id, path })}
+                  />
+                )
+              })}
+          </Section>
+        )}
+
+        {enabled.map((a) => (
+          <Section
+            key={a.id}
+            title={a.description}
+            warning={p.errors[a.id]}
+            open={!collapsed[a.id]}
+            onToggle={() => toggle(a.id)}
+          >
+            {!p.mailboxes[a.id] && !p.errors[a.id] && <div className="sb-loading">Loading…</div>}
+            {p.mailboxes[a.id]?.map((b) => (
+              <Item
+                key={b.path}
+                icon={b.specialUse ? ICONS[b.specialUse] : Folder}
+                label={b.name}
+                depth={b.depth}
+                count={COUNTED.has(b.specialUse) ? b.unseen : 0}
+                selected={isSel(a.id, b.path)}
+                onClick={() => p.onSelect({ kind: 'mailbox', accountId: a.id, path: b.path })}
+              />
+            ))}
+          </Section>
+        ))}
+      </nav>
+      <div className="sb-footer">
+        <button className="sb-footer-btn" title="Add Account" onClick={p.onAddAccount}>
+          <Plus size={16} />
+        </button>
+        <button className="sb-footer-btn" title="Settings (Ctrl+,)" onClick={p.onOpenSettings}>
+          <Settings size={16} />
+        </button>
+      </div>
+    </aside>
+  )
+}
+
+function Item(props: {
+  icon: LucideIcon
+  label: string
+  count?: number
+  depth?: number
+  selected: boolean
+  onClick: () => void
+  expander?: { open: boolean; onToggle: () => void }
+}) {
+  const Icon = props.icon
+  return (
+    <button
+      className={`sb-item ${props.selected ? 'is-selected' : ''}`}
+      style={{ paddingLeft: 8 + (props.depth ?? 0) * 16 }}
+      onClick={props.onClick}
+    >
+      <Icon size={16} strokeWidth={1.8} className="sb-icon" />
+      <span className="sb-label">{props.label}</span>
+      {props.count ? <span className="sb-count">{props.count}</span> : null}
+      {props.expander && (
+        <span
+          className="sb-expander"
+          role="button"
+          aria-label={props.expander.open ? 'Collapse' : 'Expand'}
+          onClick={(e) => {
+            e.stopPropagation()
+            props.expander!.onToggle()
+          }}
+        >
+          <ChevronDown
+            size={12}
+            style={{ transform: props.expander.open ? 'none' : 'rotate(-90deg)' }}
+          />
+        </span>
+      )}
+    </button>
+  )
+}
+
+function Section(props: {
+  title: string
+  open: boolean
+  warning?: string
+  onToggle: () => void
+  children: ReactNode
+}) {
+  return (
+    <div className="sb-section">
+      <button className="sb-section-title" onClick={props.onToggle}>
+        <span className="sb-section-name">
+          {props.title}
+          {props.warning && (
+            <span title={props.warning} className="sb-warning">
+              <TriangleAlert size={12} />
+            </span>
+          )}
+        </span>
+        <ChevronDown
+          size={12}
+          className="sb-chevron"
+          style={{ transform: props.open ? 'none' : 'rotate(-90deg)' }}
+        />
+      </button>
+      {props.open && <div>{props.children}</div>}
+      {props.open && props.warning && <div className="sb-error">{props.warning}</div>}
+    </div>
+  )
+}
