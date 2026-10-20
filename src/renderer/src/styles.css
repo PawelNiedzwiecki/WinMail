@@ -247,6 +247,55 @@ button {
   gap: 2px;
 }
 
+.compose-pill {
+  height: 30px;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 0 14px 0 12px;
+  border-radius: 999px;
+  background: var(--accent);
+  color: #fff;
+  font-weight: 600;
+  -webkit-app-region: no-drag;
+}
+.compose-pill:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--accent) 88%, #000);
+}
+.compose-pill:disabled {
+  opacity: 0.4;
+}
+
+.tb-divider {
+  width: 1px;
+  height: 16px;
+  background: var(--hairline);
+  flex-shrink: 0;
+}
+
+.reader {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.action-bar {
+  height: 40px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 14px;
+  border-bottom: 1px solid var(--hairline);
+  background: var(--surface);
+}
+.action-count {
+  margin-left: auto;
+  font-size: 12px;
+  color: var(--text-3);
+}
+
 .tb-btn {
   width: 32px;
   height: 28px;
@@ -272,10 +321,10 @@ button {
   display: flex;
   align-items: center;
   gap: 6px;
-  width: 220px;
-  height: 28px;
+  width: 260px;
+  height: 30px;
   padding: 0 8px;
-  border-radius: 7px;
+  border-radius: 8px;
   background: var(--input-bg);
   color: var(--text-3);
   -webkit-app-region: no-drag;
@@ -291,6 +340,27 @@ button {
 }
 .search:focus-within {
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 35%, transparent);
+}
+.search-kbd {
+  font: inherit;
+  font-size: 11px;
+  color: var(--text-3);
+  pointer-events: none;
+}
+.search:focus-within .search-kbd {
+  display: none;
+}
+.search-clear {
+  width: 18px;
+  height: 18px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  color: var(--text-3);
+}
+.search-clear:hover {
+  background: var(--hover);
+  color: var(--text);
 }
 
 /* ---------- Message list ---------- */
@@ -1270,51 +1340,6 @@ textarea {
   padding: 26px 40px;
 }
 
-.settings-body.accounts {
-  display: flex;
-  gap: 18px;
-  padding: 18px;
-}
-.acct-list-wrap {
-  width: 220px;
-  flex-shrink: 0;
-  display: flex;
-  flex-direction: column;
-  border-radius: 8px;
-  overflow: hidden;
-  box-shadow: 0 0 0 0.5px var(--control-border);
-  background: var(--surface-alt);
-}
-.acct-list {
-  flex: 1;
-  overflow-y: auto;
-  padding: 4px;
-}
-.acct-row {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  width: 100%;
-  padding: 6px 8px;
-  border-radius: 6px;
-  text-align: left;
-}
-.acct-row.is-selected {
-  background: var(--accent);
-  color: #fff;
-}
-.acct-icon {
-  width: 30px;
-  height: 30px;
-  flex-shrink: 0;
-  display: grid;
-  place-items: center;
-  border-radius: 8px;
-  font-size: 12px;
-  font-weight: 700;
-  color: #fff;
-  background: #8e8e93;
-}
 .provider-bg-icloud {
   background: linear-gradient(180deg, #5ac8fa, #007aff);
 }
@@ -1330,60 +1355,6 @@ textarea {
 .provider-bg-outlook {
   background: linear-gradient(180deg, #2a8ae0, #0f5ba8);
 }
-.acct-text {
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-}
-.acct-name {
-  font-weight: 600;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.acct-sub {
-  font-size: 11px;
-  opacity: 0.7;
-}
-.acct-empty {
-  padding: 20px;
-  text-align: center;
-  color: var(--text-3);
-}
-.acct-buttons {
-  display: flex;
-  border-top: 1px solid var(--hairline);
-  padding: 2px;
-}
-.acct-detail {
-  flex: 1;
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  overflow-y: auto;
-  padding-right: 4px;
-}
-.acct-detail .form-row {
-  grid-template-columns: 120px 1fr;
-}
-.acct-detail .form-group-title {
-  padding-left: 130px;
-}
-.acct-placeholder,
-.confirm {
-  margin: auto;
-  text-align: center;
-  color: var(--text-2);
-  max-width: 320px;
-}
-.confirm p {
-  color: var(--text);
-  line-height: 1.5;
-}
-.confirm .sheet-actions {
-  justify-content: center;
-}
-
 .segmented {
   display: flex;
   align-self: center;

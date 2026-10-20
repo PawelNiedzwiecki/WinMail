@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, type ClipboardEvent, type DragEvent, type KeyboardEvent } from 'react'
+import { useEffect, useLayoutEffect, useRef, type ClipboardEvent, type DragEvent, type KeyboardEvent, type MouseEvent } from 'react'
 import { addFiles, pasteImages } from '../../compose/actions'
 import { touch } from '../../compose/autosave'
 import { exec, insertHtml, insertText, toggleQuote } from '../../compose/editorCommands'
@@ -101,6 +101,26 @@ export function RichEditor({ id, body, plain, revision, onLink }: Props) {
     else if (isKey(e, KEYS.strike)) run(() => exec('strikeThrough'))
   }
 
+  /** A click in the empty space below the signature would type into it; use the line above instead. */
+  const keepOutOfSignature = (e: MouseEvent) => {
+    const root = ref.current
+    const sel = window.getSelection()
+    const sig = root?.querySelector<HTMLElement>('.winmail-signature')
+    if (!root || !sig || plain || !sel?.isCollapsed || !sel.anchorNode || !sig.contains(sel.anchorNode)) return
+    if (e.clientY <= sig.getBoundingClientRect().bottom) return
+    let line = sig.previousElementSibling as HTMLElement | null
+    if (!line) {
+      line = document.createElement('div')
+      line.innerHTML = '<br>'
+      root.insertBefore(line, sig)
+    }
+    const r = document.createRange()
+    r.selectNodeContents(line)
+    r.collapse(false)
+    sel.removeAllRanges()
+    sel.addRange(r)
+  }
+
   const onPaste = (e: ClipboardEvent) => {
     const data = e.clipboardData
     const text = data.getData('text/plain')
@@ -155,6 +175,7 @@ export function RichEditor({ id, body, plain, revision, onLink }: Props) {
       onPaste={onPaste}
       onDrop={onDrop}
       onDragStart={() => (draggingHere.current = true)}
+      onMouseUp={keepOutOfSignature}
       onClick={(e) => {
         const a = (e.target as HTMLElement).closest('a')
         if (a && !plain) onLink(a)

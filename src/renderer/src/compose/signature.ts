@@ -4,7 +4,8 @@ import { escapeHtml } from './sanitize'
 export function signatureHtml(text: string): string {
   return escapeHtml(text.trim())
     .replace(/\r?\n/g, '<br>')
-    .replace(/\bhttps?:\/\/[^\s<]+[^\s<.,;:!?)]/g, (url) => `<a href="${url}">${url}</a>`)
+    // The text is already escaped, so an entity (&gt; &quot; &amp;) after an address is not part of it.
+    .replace(/\bhttps?:\/\/(?:(?!&(?:gt|lt|quot);)[^\s<])+(?<![.,;:!?)])/g, (url) => `<a href="${url}">${url}</a>`)
 }
 
 /**

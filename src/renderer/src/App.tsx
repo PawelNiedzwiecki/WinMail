@@ -35,6 +35,7 @@ import { Sidebar, inboxPath, type Selection } from './components/Sidebar'
 import { MessageList } from './components/MessageList'
 import { MessageView } from './components/MessageView'
 import { Toolbar } from './components/Toolbar'
+import { ActionBar } from './components/ActionBar'
 import { ComposeDock } from './components/compose/ComposeDock'
 import { ComposeContext } from './compose/ComposeContext'
 import {
@@ -469,7 +470,7 @@ export default function App() {
 
   /** What toolbar buttons and shortcuts act on: every selected row, with whole conversations. */
   const targets = (): MessageSummary[] => {
-    const keys = multi ? checked : new Set(selectedKey ? [selectedKey] : [])
+    const keys = checked.size > 0 ? checked : new Set(selectedKey ? [selectedKey] : [])
     return withThread(visible.filter((m) => keys.has(m.key)))
   }
 
@@ -891,7 +892,8 @@ export default function App() {
       if (path) setSelection({ kind: 'mailbox', accountId, path })
     },
     setSettings: updateSettings,
-    focusList: () => document.querySelector<HTMLElement>('.row.is-selected, .list-scroll')?.focus(),
+    focusList: () =>
+      (document.querySelector<HTMLElement>('.row.is-selected') ?? document.querySelector<HTMLElement>('.list-scroll'))?.focus(),
     selectedKey: () => selectedKey
   })
 
@@ -956,7 +958,7 @@ export default function App() {
         void openFromDrafts(selected)
       } else if (e.key === 'Delete') {
         void moveMessages(targets(), 'trash')
-      } else if (e.key === 'Escape' && multi) {
+      } else if (e.key === 'Escape' && checked.size > 0) {
         setChecked(new Set())
       } else if (isKey(e, { key: 'a', ctrl: true })) {
         e.preventDefault()
@@ -970,12 +972,21 @@ export default function App() {
       }
     }
     /** Moves the selection one row; with Shift, extends the selection instead. */
-    const step = (dir: 1 | -1, extend = false) => {
+    const step = (dir: 1 | -1, extend = false, keepMarks = false) => {
       const idx = rows.findIndex((m) => m.key === selectedKey)
       const next = rows[idx < 0 ? 0 : Math.min(rows.length - 1, Math.max(0, idx + dir))]
       if (!next) return
       if (extend) onSelectRow(next.key, { toggle: false, range: true })
+      else if (keepMarks && checked.size > 0) setSelectedKey(next.key) // j/k move on, the rows marked with x stay
       else onSelectRow(next.key)
+    }
+    /** x: add the current row to the marked rows, or take it out again. */
+    const markRow = (key: string) => {
+      const cur = new Set(checked)
+      if (cur.has(key)) cur.delete(key)
+      else cur.add(key)
+      anchor.current = key
+      setChecked(cur)
     }
     // Gmail's single-key shortcuts; letters by e.key, symbols by physical key, never with Ctrl or Alt.
     const gmailKey = (e: KeyboardEvent) => {
@@ -983,8 +994,8 @@ export default function App() {
         e.preventDefault()
         fn()
       }
-      if (isKey(e, { key: 'j' })) run(() => step(1))
-      else if (isKey(e, { key: 'k' })) run(() => step(-1))
+      if (isKey(e, { key: 'j' })) run(() => step(1, false, true))
+      else if (isKey(e, { key: 'k' })) run(() => step(-1, false, true))
       else if (isKey(e, { key: 'e' })) run(() => moveMessages(targets(), 'archive'))
       else if (isKey(e, { code: 'Digit3', shift: true })) run(() => moveMessages(targets(), 'trash'))
       else if (isKey(e, { code: 'Digit1', shift: true })) run(() => moveMessages(targets(), 'junk'))
@@ -994,7 +1005,7 @@ export default function App() {
       else if (isKey(e, { key: 's' })) run(() => toggleFlag())
       else if (isKey(e, { key: 'i', shift: true })) run(() => setFlagsMany(targets(), { seen: true }))
       else if (isKey(e, { key: 'u', shift: true })) run(() => setFlagsMany(targets(), { seen: false }))
-      else if (isKey(e, { key: 'x' })) run(() => selectedKey && onSelectRow(selectedKey, { toggle: true, range: false }))
+      else if (isKey(e, { key: 'x' })) run(() => selectedKey && markRow(selectedKey))
       else if (isKey(e, { key: 'b' })) run(() => askSnooze())
       else if (isKey(e, { key: 'v' })) run(() => askMove())
       else if (isKey(e, { key: 'z' })) run(() => lastUndo.current?.())
@@ -1071,24 +1082,11 @@ export default function App() {
       <div className="content">
         <Toolbar
           hasAccounts={enabled.length > 0}
-          hasSelection={!!selected || multi}
-          selectionRead={targets().every((m) => m.seen)}
           refreshing={refreshing}
           query={query}
           onQuery={setQuery}
           onRefresh={() => refresh(false)}
           onCompose={newMessage}
-          onArchive={() => moveMessages(targets(), 'archive')}
-          onTrash={() => moveMessages(targets(), 'trash')}
-          onJunk={() => moveMessages(targets(), 'junk')}
-          onMove={() => askMove()}
-          onSnooze={() => askSnooze()}
-          canMove={oneAccount(targets())}
-          onReply={() => respond('reply')}
-          onReplyAll={() => respond('all')}
-          onForward={() => respond('forward')}
-          onFlag={() => toggleFlag()}
-          onToggleRead={() => toggleSeen()}
         />
         {ready && enabled.length === 0 ? (
           <Welcome onAddAccount={() => setAdding(true)} />
@@ -1120,6 +1118,23 @@ export default function App() {
                 loadMessages(selection, accounts, mailboxes, false, next, category)
               }}
             />
+            <div className="reader">
+            <ActionBar
+              hasSelection={!!selected || multi}
+              count={multi ? checked.size : 0}
+              selectionRead={targets().every((m) => m.seen)}
+              canMove={oneAccount(targets())}
+              onArchive={() => moveMessages(targets(), 'archive')}
+              onTrash={() => moveMessages(targets(), 'trash')}
+              onJunk={() => moveMessages(targets(), 'junk')}
+              onMove={() => askMove()}
+              onSnooze={() => askSnooze()}
+              onReply={() => respond('reply')}
+              onReplyAll={() => respond('all')}
+              onForward={() => respond('forward')}
+              onFlag={() => toggleFlag()}
+              onToggleRead={() => toggleSeen()}
+            />
             <MessageView
               summary={selected}
               detail={detail && detail.key === selected?.key ? detail : null}
@@ -1139,6 +1154,7 @@ export default function App() {
               onCloseSummary={() => setAiSummary(null)}
               onUnsubscribe={unsubscribe}
             />
+            </div>
           </div>
         )}
       </div>

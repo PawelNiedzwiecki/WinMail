@@ -57,7 +57,7 @@ export function MessageList(p: Props) {
       </header>
       {p.tabs}
       {p.error && <div className="list-error">{p.error}</div>}
-      <div className="list-scroll" role="listbox" aria-multiselectable onScroll={onScroll}>
+      <div className="list-scroll" role="listbox" aria-multiselectable tabIndex={-1} onScroll={onScroll}>
         {p.loading && p.messages.length === 0 && (
           <div className="list-empty list-loading">
             <span className="spinner" />

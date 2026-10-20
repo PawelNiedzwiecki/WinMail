@@ -31,6 +31,15 @@ const CSS_PROPS =
   /^(color|background|background-color|font|font-(family|size|style|weight|variant)|text-(align|decoration|decoration-line|indent|transform)|line-height|letter-spacing|white-space|vertical-align|direction|margin(-(top|right|bottom|left))?|padding(-(top|right|bottom|left))?|border(-(top|right|bottom|left))?(-(width|style|color))?|border-(collapse|spacing|radius)|width|min-width|max-width|height|max-height|display|list-style(-type)?|table-layout|word-break|overflow-wrap)$/
 const CSS_DISPLAY = /^(block|inline|inline-block|table|table-row|table-cell|list-item|none)$/
 const CSS_UNSAFE = /url\(|expression\(|var\(|javascript:|@import|behavior|-moz-binding/i
+/** The only functions a kept value may call; image-set(), src() and friends can fetch a remote image. */
+const CSS_FUNCTIONS = new Set(['rgb', 'rgba', 'hsl', 'hsla', 'calc', 'min', 'max', 'clamp'])
+
+/** A backslash escape or a comment can hide a function name from these checks, so values with one go. */
+function cssValueIsSafe(value: string): boolean {
+  if (CSS_UNSAFE.test(value) || /[\\]|\/\*/.test(value)) return false
+  for (const m of value.matchAll(/([a-z0-9_-]*)\s*\(/gi)) if (!CSS_FUNCTIONS.has(m[1]!.toLowerCase())) return false
+  return true
+}
 
 function cleanStyle(style: string): string {
   return style
@@ -41,7 +50,7 @@ function cleanStyle(style: string): string {
       if (i < 1) return false
       const prop = d.slice(0, i).trim().toLowerCase()
       const value = d.slice(i + 1).trim()
-      if (!CSS_PROPS.test(prop) || CSS_UNSAFE.test(value)) return false
+      if (!CSS_PROPS.test(prop) || !cssValueIsSafe(value)) return false
       return prop !== 'display' || CSS_DISPLAY.test(value.toLowerCase())
     })
     .join('; ')

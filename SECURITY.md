@@ -1,21 +1,30 @@
 # Security Policy
 
-## Supported Versions
+WinMail is an email client. It handles mailbox credentials and message content, so security reports are taken seriously.
 
-Use this section to tell people about which versions of your project are
-currently being supported with security updates.
+## Supported versions
 
-| Version | Supported          |
-| ------- | ------------------ |
-| 5.1.x   | :white_check_mark: |
-| 5.0.x   | :x:                |
-| 4.0.x   | :white_check_mark: |
-| < 4.0   | :x:                |
+WinMail is pre-1.0. Only the latest release (and the current `master` branch) receives security fixes.
 
-## Reporting a Vulnerability
+## Reporting a vulnerability
 
-Use this section to tell people how to report a vulnerability.
+Please **do not open a public issue** for security problems.
 
-Tell them where to go, how often they can expect to get an update on a
-reported vulnerability, what to expect if the vulnerability is accepted or
-declined, etc.
+Report privately through GitHub:
+[Report a vulnerability](https://github.com/PawelNiedzwiecki/WinMail/security/advisories/new)
+
+Include:
+- A description of the issue and its impact
+- Steps to reproduce, or a proof of concept
+- The WinMail version and Windows version
+
+What to expect:
+- Acknowledgement within 7 days
+- A status update within 30 days
+- Credit in the release notes if you want it, once a fix is out
+
+## Scope
+
+In scope: the WinMail application in this repository, including how it stores credentials, renders HTML email (sanitisation, remote content, links), and talks to IMAP/SMTP servers.
+
+Out of scope: vulnerabilities in third-party mail servers, and issues that require an attacker to already have access to your Windows account.

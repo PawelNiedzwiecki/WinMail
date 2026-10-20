@@ -167,9 +167,18 @@ async function carddavContacts(base: string, user: string, password: string): Pr
 /** FN and EMAIL lines of one vCard; one contact per address. */
 function parseVCard(card: string): Contact[] {
   const lines = card.replace(/\r?\n[ \t]/g, '').split(/\r?\n/)
+  /** Where the value starts: the first colon that isn't inside a quoted parameter (PID="1:2"). */
+  const valueStart = (line: string) => {
+    let quoted = false
+    for (let i = 0; i < line.length; i++) {
+      if (line[i] === '"') quoted = !quoted
+      else if (line[i] === ':' && !quoted) return i + 1
+    }
+    return 0
+  }
   const value = (line: string) =>
     line
-      .slice(line.indexOf(':') + 1)
+      .slice(valueStart(line))
       .replace(/\\([,;\\])/g, '$1')
       .replace(/\\n/gi, ' ')
       .trim()

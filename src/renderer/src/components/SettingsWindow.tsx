@@ -1,11 +1,25 @@
-import { AtSign, Keyboard, Minus, Monitor, Moon, PenLine, Plus, SlidersHorizontal, Sparkles, Sun, X, type LucideIcon } from 'lucide-react'
-import { useEffect, useState } from 'react'
+import {
+  AtSign,
+  ChevronLeft,
+  ChevronRight,
+  Keyboard,
+  Monitor,
+  Moon,
+  PenLine,
+  Plus,
+  SlidersHorizontal,
+  Sparkles,
+  Sun,
+  X,
+  type LucideIcon
+} from 'lucide-react'
+import { useEffect, useState, type ReactNode } from 'react'
 import { useEscape } from '../useEscape'
 import type { Account, Appearance, ComposeFormat, ContactsStatus, MessageAppearance, Settings } from '@shared/types'
 import { getProvider } from '@shared/providers'
 import { api } from '../api'
-import { initials } from '../format'
 import { Row, ServerFields } from './forms'
+import { ProviderLogo } from './ProviderLogo'
 import { Select } from './Select'
 import { Group, Item, KeyRow, Segmented, Switch } from './settings/controls'
 
@@ -316,87 +330,128 @@ function AccountsPane({
   onAdd: () => void
   onChanged: () => void
 }) {
-  const [selectedId, setSelectedId] = useState<string | null>(accounts[0]?.id ?? null)
-  const selected = accounts.find((a) => a.id === selectedId) ?? accounts[0] ?? null
-  const [confirmRemove, setConfirmRemove] = useState(false)
+  const [selectedId, setSelectedId] = useState<string | null>(null)
+  const selected = accounts.find((a) => a.id === selectedId) ?? null
 
-  useEffect(() => {
-    if (!accounts.some((a) => a.id === selectedId)) setSelectedId(accounts[0]?.id ?? null)
-  }, [accounts, selectedId])
-
-  const remove = async () => {
-    if (!selected) return
-    await api.removeAccount(selected.id)
-    setConfirmRemove(false)
-    onChanged()
+  if (selected) {
+    return (
+      <AccountDetail
+        key={selected.id}
+        account={selected}
+        onBack={() => setSelectedId(null)}
+        onChanged={onChanged}
+        onRemoved={() => {
+          setSelectedId(null)
+          onChanged()
+        }}
+      />
+    )
   }
 
   return (
-    <div className="st-accounts">
-      <div className="acct-list-wrap">
-        <div className="acct-list">
+    <div className="acct-page">
+      <div className="acct-intro">
+        <p>Mail accounts WinMail checks and sends from. Select one to edit its details, signature and servers.</p>
+        <button className="btn btn-primary acct-add" onClick={onAdd}>
+          <Plus size={14} strokeWidth={2.2} />
+          Add account
+        </button>
+      </div>
+      {accounts.length === 0 ? (
+        <div className="acct-empty">
+          <AtSign size={22} strokeWidth={1.6} />
+          <p>No accounts yet. Add one to start using WinMail.</p>
+        </div>
+      ) : (
+        <div className="st-card acct-cards">
           {accounts.map((a) => (
-            <button
-              key={a.id}
-              className={`acct-row ${a.id === selected?.id ? 'is-selected' : ''}`}
-              onClick={() => {
-                setSelectedId(a.id)
-                setConfirmRemove(false)
-              }}
-            >
-              <span className={`acct-icon provider-bg-${a.provider}`}>{initials(a.description)}</span>
+            <button key={a.id} className="acct-card" onClick={() => setSelectedId(a.id)}>
+              <ProviderLogo id={a.provider} />
               <span className="acct-text">
                 <span className="acct-name">{a.description}</span>
-                <span className="acct-sub">{!a.enabled ? 'Inactive' : a.auth === 'oauth' ? 'Google' : 'IMAP'}</span>
+                <span className="acct-sub">{a.email}</span>
               </span>
+              <span className={`acct-chip${a.enabled ? ' is-on' : ''}`}>{a.enabled ? 'Active' : 'Paused'}</span>
+              <ChevronRight size={16} className="acct-chevron" />
             </button>
           ))}
-          {accounts.length === 0 && <div className="acct-empty">No accounts</div>}
         </div>
-        <div className="acct-buttons">
-          <button className="sq-btn" title="Add Account" aria-label="Add account" onClick={onAdd}>
-            <Plus size={14} />
-          </button>
-          <button
-            className="sq-btn"
-            title="Remove Account"
-            aria-label="Remove account"
-            disabled={!selected}
-            onClick={() => setConfirmRemove(true)}
-          >
-            <Minus size={14} />
-          </button>
+      )}
+    </div>
+  )
+}
+
+function AccountDetail({
+  account,
+  onBack,
+  onChanged,
+  onRemoved
+}: {
+  account: Account
+  onBack: () => void
+  onChanged: () => void
+  onRemoved: () => void
+}) {
+  const [confirmRemove, setConfirmRemove] = useState(false)
+  const [removing, setRemoving] = useState(false)
+
+  const remove = async () => {
+    setRemoving(true)
+    try {
+      await api.removeAccount(account.id)
+      onRemoved()
+    } finally {
+      setRemoving(false)
+    }
+  }
+
+  return (
+    <div className="st-acct-detail">
+      <div className="acct-head">
+        <button className="acct-back" onClick={onBack}>
+          <ChevronLeft size={16} />
+          Accounts
+        </button>
+        <div className="acct-id">
+          <ProviderLogo id={account.provider} />
+          <span className="acct-text">
+            <span className="acct-name">{account.description}</span>
+            <span className="acct-sub">{account.email}</span>
+          </span>
         </div>
       </div>
 
-      <div className="st-acct-detail">
-        {selected ? (
-          confirmRemove ? (
-            <div className="confirm">
-              <p>
-                Are you sure you want to remove “{selected.description}”? Messages are not deleted from the server.
-              </p>
-              <div className="sheet-actions">
-                <button className="btn" onClick={() => setConfirmRemove(false)}>
-                  Cancel
+      <AccountEditor
+        account={account}
+        onSaved={onChanged}
+        footer={
+          <Group title="Remove">
+            <Item
+              title="Remove this account"
+              description={
+                confirmRemove
+                  ? `Remove “${account.description}” from WinMail? Messages stay on the server.`
+                  : 'Stops WinMail using this account. Messages stay on the server.'
+              }
+            >
+              {confirmRemove ? (
+                <>
+                  <button className="btn" disabled={removing} onClick={() => setConfirmRemove(false)}>
+                    Cancel
+                  </button>
+                  <button className="btn btn-danger" disabled={removing} onClick={remove}>
+                    Remove
+                  </button>
+                </>
+              ) : (
+                <button className="btn btn-quiet-danger" onClick={() => setConfirmRemove(true)}>
+                  Remove…
                 </button>
-                <button className="btn btn-danger" onClick={remove}>
-                  Remove
-                </button>
-              </div>
-            </div>
-          ) : (
-            <AccountEditor key={selected.id} account={selected} onSaved={onChanged} />
-          )
-        ) : (
-          <div className="acct-placeholder">
-            <p>Add an account to start using WinMail.</p>
-            <button className="btn btn-primary" onClick={onAdd}>
-              Add Account…
-            </button>
-          </div>
-        )}
-      </div>
+              )}
+            </Item>
+          </Group>
+        }
+      />
     </div>
   )
 }
@@ -424,7 +479,15 @@ function ContactsRow({ accountId }: { accountId: string }) {
   )
 }
 
-function AccountEditor({ account, onSaved }: { account: Account; onSaved: () => void }) {
+function AccountEditor({
+  account,
+  onSaved,
+  footer
+}: {
+  account: Account
+  onSaved: () => void
+  footer?: ReactNode
+}) {
   const [tab, setTab] = useState<'info' | 'server'>('info')
   const [draft, setDraft] = useState(account)
   const [password, setPassword] = useState('')
@@ -486,14 +549,15 @@ function AccountEditor({ account, onSaved }: { account: Account; onSaved: () => 
 
   return (
     <>
-      <div className="st-tabs" role="tablist">
-        <button role="tab" aria-selected={tab === 'info'} className={tab === 'info' ? 'is-active' : ''} onClick={() => setTab('info')}>
-          Account
-        </button>
-        <button role="tab" aria-selected={tab === 'server'} className={tab === 'server' ? 'is-active' : ''} onClick={() => setTab('server')}>
-          Server settings
-        </button>
-      </div>
+      <Segmented<'info' | 'server'>
+        label="Account section"
+        value={tab}
+        onChange={setTab}
+        options={[
+          { value: 'info', label: 'General' },
+          { value: 'server', label: 'Servers' }
+        ]}
+      />
 
       {tab === 'info' ? (
         <>
@@ -534,6 +598,7 @@ function AccountEditor({ account, onSaved }: { account: Account; onSaved: () => 
               />
             </Item>
           </Group>
+          {footer}
         </>
       ) : (
         <>
@@ -603,24 +668,30 @@ function AccountEditor({ account, onSaved }: { account: Account; onSaved: () => 
 
       {error && <div className="form-error">{error}</div>}
 
-      <div className="st-savebar">
-        {saved && !dirty && <span className="saved">Saved</span>}
-        <span className="tb-spacer" />
-        <button
-          className="btn"
-          disabled={!dirty || busy}
-          onClick={() => {
-            setDraft(account)
-            setPassword('')
-            setError(null)
-          }}
-        >
-          Revert
-        </button>
-        <button className="btn btn-primary" disabled={!dirty || busy} onClick={save}>
-          {busy ? 'Verifying…' : 'Save'}
-        </button>
-      </div>
+      {(dirty || saved) && (
+        <div className="st-savebar">
+          {dirty ? <span className="st-unsaved">Unsaved changes</span> : <span className="saved">Saved</span>}
+          <span className="tb-spacer" />
+          {dirty && (
+            <>
+              <button
+                className="btn"
+                disabled={busy}
+                onClick={() => {
+                  setDraft(account)
+                  setPassword('')
+                  setError(null)
+                }}
+              >
+                Revert
+              </button>
+              <button className="btn btn-primary" disabled={busy} onClick={save}>
+                {busy ? 'Verifying…' : 'Save'}
+              </button>
+            </>
+          )}
+        </div>
+      )}
     </>
   )
 }
