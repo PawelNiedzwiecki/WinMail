@@ -466,6 +466,13 @@ export function createMockApi(): WinMailApi {
     onOpenMessage() {
       return () => {}
     },
+    async testNotification() {
+      console.info('A sample notification shows here in WinMail.')
+    },
+    onNotificationAvatar() {
+      return () => {}
+    },
+    setTaskbarBadge() {},
     showEmojiPanel() {
       console.info('Emoji panel opens here in WinMail.')
     },

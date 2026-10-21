@@ -264,6 +264,22 @@
   gap: 8px;
 }
 
+/* ---------- Notifications ---------- */
+.st-item-with-icon {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.st-time-range {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-2);
+}
+.st-item-control .st-time-range .select {
+  min-width: 92px;
+}
+
 /* ---------- Shortcuts ---------- */
 .st-keyrow {
   min-height: 40px;

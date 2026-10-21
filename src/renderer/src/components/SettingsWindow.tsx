@@ -1,5 +1,6 @@
 import {
   AtSign,
+  Bell,
   ChevronLeft,
   ChevronRight,
   Keyboard,
@@ -24,8 +25,9 @@ import { Row, ServerFields } from './forms'
 import { ProviderLogo } from './ProviderLogo'
 import { Select } from './Select'
 import { Group, Item, KeyRow, Segmented, Switch } from './settings/controls'
+import { NotificationsPage } from './settings/NotificationsPage'
 
-export type SettingsTab = 'general' | 'appearance' | 'composing' | 'shortcuts' | 'ai' | 'accounts'
+export type SettingsTab = 'general' | 'appearance' | 'notifications' | 'composing' | 'shortcuts' | 'ai' | 'accounts'
 
 interface Props {
   tab: SettingsTab
@@ -41,6 +43,7 @@ interface Props {
 const PAGES: { id: SettingsTab; label: string; icon: LucideIcon }[] = [
   { id: 'general', label: 'General', icon: SlidersHorizontal },
   { id: 'appearance', label: 'Appearance', icon: Palette },
+  { id: 'notifications', label: 'Notifications', icon: Bell },
   { id: 'composing', label: 'Composing', icon: PenLine },
   { id: 'shortcuts', label: 'Shortcuts', icon: Keyboard },
   { id: 'ai', label: 'Claude', icon: Sparkles },
@@ -77,6 +80,9 @@ export function SettingsWindow(p: Props) {
           <div className="st-scroll">
             {page.id === 'general' && <GeneralPage settings={p.settings} onChange={p.onSettings} />}
             {page.id === 'appearance' && <AppearancePage settings={p.settings} onChange={p.onSettings} />}
+            {page.id === 'notifications' && (
+              <NotificationsPage settings={p.settings} accounts={p.accounts} onChange={p.onSettings} />
+            )}
             {page.id === 'composing' && (
               <ComposingPage settings={p.settings} onChange={p.onSettings} onAccounts={() => p.onTab('accounts')} />
             )}
@@ -114,13 +120,6 @@ function GeneralPage({ settings, onChange }: PageProps) {
               { value: '60', label: 'Every hour' },
               { value: '0', label: 'Manually' }
             ]}
-          />
-        </Item>
-        <Item title="Notifications" description="Notify me about new mail while WinMail is in the background.">
-          <Switch
-            label="Notify me about new mail"
-            checked={settings.notifyNewMail}
-            onChange={(notifyNewMail) => onChange({ ...settings, notifyNewMail })}
           />
         </Item>
       </Group>

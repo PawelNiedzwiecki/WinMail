@@ -93,6 +93,15 @@ const api: WinMailApi = {
   onMailProgress: (cb) => on('mail:progress', cb),
   onOpenMessage: (cb) => on('mail:open', cb),
 
+  testNotification: () => call('notify:test'),
+  onNotificationAvatar: (draw) =>
+    on<{ id: number; name: string; email: string }>('notify:avatar', (r) => {
+      draw(r.name, r.email)
+        .catch(() => '')
+        .then((url) => ipcRenderer.send('notify:avatar-done', r.id, url))
+    }),
+  setTaskbarBadge: (count, image) => ipcRenderer.send('app:badge', count, image),
+
   showEmojiPanel: () => ipcRenderer.send('app:emoji'),
   onCloseRequested: (cb) => on('app:close-requested', cb),
   closeReady: () => ipcRenderer.send('app:close-ready'),

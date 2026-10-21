@@ -49,6 +49,9 @@ interface Props {
   tabs?: ReactNode
   /** What the list shows (folder, category, search); when it changes, rows swap without animating. */
   view?: string
+  /** Only unread messages are listed; the header has the toggle when `onUnreadOnly` is set. */
+  unreadOnly?: boolean
+  onUnreadOnly?: (on: boolean) => void
   onSelect: (key: string, mods?: { toggle: boolean; range: boolean }) => void
   /** Double-click or Enter on a row. */
   onOpen?: (key: string) => void
@@ -84,19 +87,36 @@ export function MessageList(p: Props) {
       style={{ '--preview-lines': p.previewLines } as CSSProperties}
     >
       <header className="list-header">
-        <h1>{p.title}</h1>
-        <span className="list-sub">
-          {p.subtitle ? `${p.subtitle} · ` : ''}
-          {showSkeleton
-            ? 'Loading…'
-            : `${p.messages.length} ${p.messages.length === 1 ? 'message' : 'messages'}${unread ? `, ${unread} unread` : ''}`}
-        </span>
+        <div className="list-heading">
+          <h1>{p.title}</h1>
+          <span className="list-sub">
+            {p.subtitle ? `${p.subtitle} · ` : ''}
+            {showSkeleton
+              ? 'Loading…'
+              : p.unreadOnly
+                ? `${unread} unread`
+                : `${p.messages.length} ${p.messages.length === 1 ? 'message' : 'messages'}${unread ? `, ${unread} unread` : ''}`}
+          </span>
+        </div>
+        {p.onUnreadOnly && (
+          <button
+            className={`list-filter ${p.unreadOnly ? 'is-on' : ''}`}
+            aria-pressed={!!p.unreadOnly}
+            title={p.unreadOnly ? 'Show all messages' : 'Show only unread messages'}
+            onClick={() => p.onUnreadOnly?.(!p.unreadOnly)}
+          >
+            <span className="list-filter-dot" />
+            Unread
+          </button>
+        )}
       </header>
       {p.tabs}
       {p.error && <div className="list-error">{p.error}</div>}
       <div className="list-scroll" role="listbox" aria-multiselectable tabIndex={-1} onScroll={onScroll}>
         {showSkeleton && <ListSkeleton previewLines={p.previewLines} />}
-        {!p.loading && p.messages.length === 0 && !p.error && <div className="list-empty">No messages</div>}
+        {!p.loading && p.messages.length === 0 && !p.error && (
+          <div className="list-empty">{p.unreadOnly ? 'No unread messages' : 'No messages'}</div>
+        )}
         {!showSkeleton && (
           <AnimatePresence initial={false} custom={instant}>
             {p.messages.map((m) => {

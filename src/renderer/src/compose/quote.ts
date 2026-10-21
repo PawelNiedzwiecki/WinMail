@@ -1,14 +1,12 @@
 import type { Address, MessageDetail, MessageSummary } from '@shared/types'
+import { stripPrefixes } from '@shared/subject'
 import { chipsFromAddresses, type Chip } from './addresses'
 import { QUOTE_STYLE } from './outgoing'
 import { escapeHtml, sanitizeHtml, textToHtml } from './sanitize'
 import type { ReplyMode } from './sessions'
 
-/** Re:/Fwd: prefixes, including Polish (Odp:, PD:) and German (AW:, WG:) ones, so they don't pile up. */
-const strip = (s: string) => s.replace(/^((re|fwd?|aw|wg|odp|pd|tr)\s*:\s*)+/i, '')
-
 export const subjectFor = (mode: ReplyMode, subject: string) =>
-  `${mode === 'forward' ? 'Fwd' : 'Re'}: ${strip(subject === '(No Subject)' ? '' : subject)}`
+  `${mode === 'forward' ? 'Fwd' : 'Re'}: ${stripPrefixes(subject === '(No Subject)' ? '' : subject)}`
 
 const when = (iso: string) => new Date(iso).toLocaleString('en-GB', { dateStyle: 'medium', timeStyle: 'short' })
 const who = (a: Address) => (a.name && a.name !== a.email ? `${a.name} <${a.email}>` : a.email)

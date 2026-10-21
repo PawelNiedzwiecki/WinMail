@@ -85,9 +85,16 @@ New methods added by roadmap items are listed in the changelog entry that introd
 
 **Settings.** General: appearance, message content appearance, check interval, load remote content. Accounts: info, server settings, Google re-sign-in, contacts status.
 
+**Notifications.** Windows toasts for new inbox mail while no WinMail window is focused: sender avatar, subject and preview, inline reply (sent through the undo-send outbox), Archive and Mark as read; more than 3 at once become one summary with Mark all as read. Settings > Notifications: on/off, all mail / Primary only / people I know, per-account switches, preview (full / sender / hidden), sound, quiet hours, test button, unread count on the taskbar button. See NOTIFICATIONS.md.
+
 **Shortcuts.** Ctrl+N new, Ctrl+R reply, Ctrl+Shift+R reply all, Ctrl+Shift+F forward, Ctrl+F search, Ctrl+, settings, Del delete, Up/Down move selection (Shift extends), Ctrl+A select all, Ctrl+Enter send, Esc close. Optional Gmail keys: j/k, e, #, !, r, a, f, s, Shift+I/U, x, b, v, z, c, /.
 
 ## 6. Changelog
+
+### 2026-10-21 — Notifications redesign (details in NOTIFICATIONS.md)
+- New `main/notifications.ts` (`Notifier`) replaces the inline `announce` in `index.ts`: avatar drawn by the renderer (`notifyArt.ts`), inline reply via `Outbox.queue`, Archive / Mark as read buttons, summary toast, account headers when several accounts are on.
+- Settings: `notifyFilter`, `notifyMutedAccounts`, `notifySound`, `notifyPreview`, `quietHours` / `quietStart` / `quietEnd`, `taskbarBadge`; new Settings > Notifications page (the switch left General). `Contacts.isKnown()` backs "People I know".
+- API: `testNotification`, `onNotificationAvatar`, `setTaskbarBadge`. Shared helpers `quietHours.ts`, `subject.ts`.
 
 ### 2026-10-20 — Inbox categories for every account, optional
 - Setting `inboxCategories` (default on), in Settings → General → Message list. Off hides the tabs and clears any active category filter.
@@ -172,3 +179,10 @@ Status: `[x]` done, `[ ]` planned. *Gmail-only* items only apply to Google accou
 - Confidential mode, Chat/Meet/Spaces: Google services, not mail.
 - Server-side filters UI and vacation responder: need the Gmail API or per-provider Sieve.
 - Outlook: needs Microsoft OAuth (tracked separately).
+- double click should open the mail in new window
+- mails are not scrollable
+- labels in mails
+- integrating AI to summarise mails or search specific criteria
+- picking up attachments at the top of the mail
+- picking up any additional events etc.
+- ~~redesign notifications~~ done 2026-10-21 (NOTIFICATIONS.md)

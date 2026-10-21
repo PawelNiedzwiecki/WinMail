@@ -6,7 +6,6 @@ import {
   Menu,
   shell,
   nativeTheme,
-  Notification,
   screen,
   type MenuItemConstructorOptions
 } from 'electron'
@@ -17,6 +16,7 @@ import { MailService } from './mail'
 import { registerIpc } from './ipc'
 import { Contacts } from './contacts'
 import { Outbox } from './outbox'
+import { Notifier } from './notifications'
 import { cleanTemp } from './attachments'
 import { loadWindowState, trackWindowState } from './windowState'
 import type { MessageSummary, OpenMessageEvent } from '../shared/types'
@@ -24,8 +24,6 @@ import type { MessageSummary, OpenMessageEvent } from '../shared/types'
 const CONTACTS_SCAN_DELAY_MS = 20_000
 /** How often snoozed mail and scheduled sends are checked. */
 const TIMER_MS = 30_000
-/** More new messages than this are announced as one notification. */
-const MAX_NOTIFICATIONS = 3
 /** How long a closing window waits for the renderer to save drafts. */
 const CLOSE_TIMEOUT_MS = 10_000
 /** Quitting never takes longer than this, even with a dead network. */
@@ -321,23 +319,9 @@ if (!app.requestSingleInstanceLock()) {
       w.focus()
       w.webContents.send('mail:open', e)
     }
-    const announce = (accountId: string, list: MessageSummary[]) => {
-      const focused = BrowserWindow.getAllWindows().some((w) => w.isFocused())
-      if (!store.getSettings().notifyNewMail || focused || !Notification.isSupported()) return
-      const account = store.listAccounts().find((a) => a.id === accountId)
-      if (list.length > MAX_NOTIFICATIONS) {
-        const n = new Notification({ title: `${list.length} new messages`, body: account?.description ?? '' })
-        n.on('click', () => open({ accountId, path: list[0]!.mailbox, uid: list[0]!.uid }))
-        n.show()
-        return
-      }
-      for (const m of list) {
-        const n = new Notification({ title: m.from.name || m.from.email, subtitle: m.subject, body: `${m.subject}
-${m.preview}` })
-        n.on('click', () => open({ accountId, path: m.mailbox, uid: m.uid }))
-        n.show()
-      }
-    }
+    // The notifier needs the outbox, which needs the mail service; it is set just below.
+    let notifier: Notifier | null = null
+    const announce = (accountId: string, list: MessageSummary[]) => void notifier?.announce(accountId, list)
     const mailService = new MailService(
       store,
       (e) => send('mail:changed', e),
@@ -354,6 +338,15 @@ ${m.preview}` })
       (input) => contacts.recordSent(input.accountId, input.to, input.cc, input.bcc)
     )
     outbox = queue
+    notifier = new Notifier({
+      store,
+      mail: mailService,
+      outbox: queue,
+      contacts,
+      window: mainWindow,
+      open,
+      changed: (e) => send('mail:changed', e)
+    })
     setMenu()
     registerIpc(store, mailService, contacts, queue)
     ipcMain.on('app:close-ready', (e) => {

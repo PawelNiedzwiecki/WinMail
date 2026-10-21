@@ -74,6 +74,7 @@ import { ScheduledDialog } from './components/ScheduledDialog'
 import { formatWhen } from './compose/schedule'
 import { groupThreads, type Thread } from './threads'
 import { applyReduceMotion, dur, ease } from './motion'
+import { drawAvatar, drawBadge } from './notifyArt'
 import { printDocument } from './print'
 import { toast } from './toasts'
 import { Resizer, usePaneWidth } from './components/Resizer'
@@ -210,6 +211,8 @@ export default function App() {
   const anchor = useRef<string | null>(null)
   /** Gmail inbox tab; null shows the whole inbox. */
   const [category, setCategory] = useState<GmailCategory | null>(null)
+  /** The list shows only unread messages (the "Unread" filter in its header). */
+  const [unreadOnly, setUnreadOnly] = useState(false)
   /** Server search results; null while the search box is empty. */
   const [searchResults, setSearchResults] = useState<MessageSummary[] | null>(null)
   const [searching, setSearching] = useState(false)
@@ -383,6 +386,13 @@ export default function App() {
 
   useEffect(() => applyReduceMotion(settings.reduceMotion), [settings.reduceMotion])
 
+  // Notifications ask this window for sender pictures; the taskbar button shows unread inbox mail.
+  useEffect(() => api.onNotificationAvatar(drawAvatar), [])
+  const unreadInbox = settings.taskbarBadge
+    ? enabled.reduce((n, a) => n + (mailboxes[a.id]?.find((b) => b.specialUse === 'inbox')?.unseen ?? 0), 0)
+    : 0
+  useEffect(() => api.setTaskbarBadge(unreadInbox, drawBadge(unreadInbox)), [unreadInbox])
+
   // Initial load
   useEffect(() => {
     ;(async () => {
@@ -540,7 +550,7 @@ export default function App() {
   }, [visible, settings.conversations])
 
   /** One row per conversation: the newest message, unread while any message is, flagged while any is. */
-  const rows = useMemo(() => {
+  const threadRows = useMemo(() => {
     if (!settings.conversations) return visible
     return visible.flatMap((m) => {
       const t = threads.get(m.key)
@@ -549,6 +559,32 @@ export default function App() {
       return [{ ...m, seen: t.members.every((x) => x.seen), flagged: t.members.some((x) => x.flagged) }]
     })
   }, [visible, threads, settings.conversations])
+
+  /** What the list shows (folder, category, search); when it changes, rows swap without animating. */
+  const listView = [
+    selection.kind === 'mailbox' ? `${selection.accountId}/${selection.path}` : 'all',
+    category ?? '',
+    query.trim(),
+    searchResults ? 'server' : '',
+    unreadOnly ? 'unread' : ''
+  ].join('|')
+
+  /**
+   * Rows listed while the "Unread" filter is on. One that gets read (opened, or marked) stays until the
+   * list, tab or filter changes, so reading mail doesn't pull rows out from under the pointer.
+   */
+  const keptRead = useRef({ view: '', keys: new Set<string>() })
+  const rows = useMemo(() => {
+    if (!unreadOnly) return threadRows
+    const kept = keptRead.current
+    if (kept.view !== listView) keptRead.current = { view: listView, keys: new Set() }
+    const keys = keptRead.current.keys
+    return threadRows.filter((m) => {
+      if (m.seen && !keys.has(m.key) && m.key !== selectedKey) return false
+      keys.add(m.key)
+      return true
+    })
+  }, [threadRows, unreadOnly, listView, selectedKey])
   const threadCounts = useMemo(() => {
     const map = new Map<string, number>()
     for (const t of new Set(threads.values())) if (t.members.length > 1) map.set(t.latest.key, t.members.length)
@@ -1237,12 +1273,9 @@ export default function App() {
               checkedKeys={checked}
               threadCounts={threadCounts}
               tabs={categoryTabs}
-              view={[
-                selection.kind === 'mailbox' ? `${selection.accountId}/${selection.path}` : 'all',
-                category ?? '',
-                query.trim(),
-                searchResults ? 'server' : ''
-              ].join('|')}
+              view={listView}
+              unreadOnly={unreadOnly}
+              onUnreadOnly={setUnreadOnly}
               loading={!ready || listLoading}
               switching={listSwitching}
               status={status}

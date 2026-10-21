@@ -234,6 +234,12 @@ export type ComposeFormat = 'rich' | 'plain'
 /** Row spacing in the message list. */
 export type ListDensity = 'compact' | 'comfortable'
 
+/** Which new mail gets a notification: everything, the Primary category, or people you know. */
+export type NotifyFilter = 'all' | 'primary' | 'people'
+
+/** How much of a message its notification shows. */
+export type NotifyPreview = 'full' | 'sender' | 'none'
+
 export interface Settings {
   /** Lines of message text shown under the subject in the list; 0 shows the title only. */
   listPreviewLines: 0 | 1 | 2 | 3
@@ -246,6 +252,17 @@ export interface Settings {
   /** Seconds a sent message can still be undone; 0 sends at once. */
   undoSendSec: number
   notifyNewMail: boolean
+  notifyFilter: NotifyFilter
+  /** Accounts that never notify. */
+  notifyMutedAccounts: string[]
+  notifySound: boolean
+  notifyPreview: NotifyPreview
+  /** No notifications from `quietStart` to `quietEnd` ("HH:MM", local time; may cross midnight). */
+  quietHours: boolean
+  quietStart: string
+  quietEnd: string
+  /** Unread inbox count on the taskbar button. */
+  taskbarBadge: boolean
   /** Single-key shortcuts like Gmail's (j/k, e, #, r, c, /). */
   gmailShortcuts: boolean
   /** Group the list into conversations. */
@@ -269,6 +286,14 @@ export const DEFAULT_SETTINGS: Settings = {
   messageAppearance: 'light',
   undoSendSec: 10,
   notifyNewMail: true,
+  notifyFilter: 'all',
+  notifyMutedAccounts: [],
+  notifySound: true,
+  notifyPreview: 'full',
+  quietHours: false,
+  quietStart: '22:00',
+  quietEnd: '07:00',
+  taskbarBadge: true,
   gmailShortcuts: false,
   conversations: true,
   inboxCategories: true,
@@ -384,6 +409,13 @@ export interface WinMailApi {
   onMailChanged(cb: (e: MailChangedEvent) => void): () => void
   onMailProgress(cb: (e: MailProgressEvent) => void): () => void
   onOpenMessage(cb: (e: OpenMessageEvent) => void): () => void
+
+  /** Shows a sample new-mail notification with the current settings. */
+  testNotification(): Promise<void>
+  /** Draws sender pictures for notifications, as PNG data URLs; the main window answers. */
+  onNotificationAvatar(draw: (name: string, email: string) => Promise<string>): () => void
+  /** Unread count on the taskbar button: `image` is the badge as a PNG data URL, null clears it. */
+  setTaskbarBadge(count: number, image: string | null): void
 
   /** Opens the Windows emoji picker at the cursor. */
   showEmojiPanel(): void

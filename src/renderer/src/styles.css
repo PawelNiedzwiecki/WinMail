@@ -469,8 +469,58 @@ body.resizing iframe {
 }
 
 .list-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
   padding: 14px 18px 10px;
   border-bottom: 1px solid var(--hairline);
+}
+.list-heading {
+  flex: 1;
+  min-width: 0;
+}
+/* "Unread" filter toggle; tinted with the accent while on. */
+.list-filter {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 24px;
+  padding: 0 10px;
+  border-radius: 12px;
+  border: 1px solid var(--hairline);
+  font-size: 11.5px;
+  color: var(--text-2);
+  transition: background 120ms ease, color 120ms ease, border-color 120ms ease;
+}
+.list-filter:hover {
+  color: var(--text);
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+}
+.list-filter.is-on {
+  color: var(--accent);
+  font-weight: 600;
+  border-color: color-mix(in srgb, var(--accent) 35%, transparent);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+.list-filter:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+.list-filter-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  border: 1.5px solid currentColor;
+}
+.list-filter.is-on .list-filter-dot {
+  border-color: var(--accent);
+  background: var(--accent);
+}
+@media (prefers-reduced-motion: reduce) {
+  .list-filter {
+    transition: none;
+  }
 }
 .list-header h1 {
   margin: 0;
