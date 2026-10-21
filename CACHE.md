@@ -59,6 +59,10 @@ Update this file at the end of every step.
 - Settings > General > Storage: size (`formatSize`) and Clear (`clear()` = close, delete the files, reopen).
 - README (features, structure, next steps) and SPEC.md (§2 tree, §3 storage table, §4 API, §5 Sync/Settings, changelog, roadmap) updated.
 
+### 2026-10-21 — Follow-up: draft validity survives restarts
+- The UIDVALIDITY each draft UID was handed out under (from `saveDraft` and `openDraft`) is now stored in a `drafts` table in `mail-cache.db` instead of a Map in `MailService`, so a draft restored from the recovery copy after a relaunch is still refused for deletion if the Drafts folder was renumbered meanwhile. Schema version 2; a version-1 file is upgraded in place (the new table is added, nothing is lost). Cleared with the account, pruned for unknown accounts, and dropped once the draft is removed.
+- Checked with a script: v1 → v2 upgrade keeps data, values survive close/reopen, forget/prune/forgetAccount.
+
 ## Open questions / to verify
 - With a real Gmail and a non-Gmail account: that `messageFlagsAdd` returns `true` on success on both (setFlags now relies on it).
 - Whether any server returns `uidValidity` in a MOVE result without `uidMap` (handled: bodies are then simply not re-keyed).

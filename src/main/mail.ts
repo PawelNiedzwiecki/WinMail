@@ -332,8 +332,6 @@ export class MailService {
   private uploads = new Map<string, Upload>()
   /** Old draft versions that could not be removed yet, retried with the account's next draft change. */
   private staleDrafts = new Map<string, Set<number>>()
-  /** UIDVALIDITY each draft UID handed out was valid under, so a renumbered Drafts folder cannot get the wrong one deleted. */
-  private draftValidity = new Map<string, string>()
   private tokens = new GoogleTokens()
 
   constructor(
@@ -1319,7 +1317,7 @@ export class MailService {
     const uid = await this.withUpload(acc.id, async (c) => {
       const res = await c.append(drafts, raw, ['\\Draft', '\\Seen'])
       if (res && res.uid) {
-        if (res.uidValidity) this.draftValidity.set(`${acc.id}|${res.uid}`, String(res.uidValidity))
+        if (res.uidValidity) this.cache.rememberDraft(acc.id, res.uid, String(res.uidValidity))
         return res.uid
       }
       // Without UIDPLUS the server doesn't say; find the copy by the Message-ID it was just given.
@@ -1373,7 +1371,7 @@ export class MailService {
           // A UID remembered from before the folder was renumbered now belongs to another message.
           const live = String(c.mailbox && c.mailbox.uidValidity)
           const ids = all.filter((u) => {
-            const was = this.draftValidity.get(`${accountId}|${u}`)
+            const was = this.cache.draftValidity(accountId, u)
             return was === undefined || was === live
           })
           if (!ids.length) return
@@ -1406,7 +1404,7 @@ export class MailService {
       })
       this.cache.remove(accountId, drafts, all)
       this.statuses.delete(`${accountId}|${drafts}`)
-      for (const u of all) this.draftValidity.delete(`${accountId}|${u}`)
+      this.cache.forgetDrafts(accountId, all)
       this.staleDrafts.delete(accountId)
     } catch (err) {
       this.staleDrafts.set(accountId, new Set(all))
@@ -1440,7 +1438,7 @@ export class MailService {
     }
     const refs = p.references ? (Array.isArray(p.references) ? p.references : [p.references]) : []
     const isDraft = path === (await this.specialPath(accountId, 'drafts'))
-    if (isDraft) this.draftValidity.set(`${accountId}|${uid}`, validity)
+    if (isDraft) this.cache.rememberDraft(accountId, uid, validity)
     return {
       accountId,
       to: formatAddresses(parsedAddresses(p.to)),

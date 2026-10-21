@@ -5,7 +5,7 @@ import { join } from 'path'
 import type { MailboxInfo, MessageDetail, MessageSummary } from '../shared/types'
 
 /** Bumped when the tables change; an older file is rebuilt, a newer one is thrown away. */
-const SCHEMA_VERSION = 1
+const SCHEMA_VERSION = 2
 
 /** Opened messages larger than this (inline images make some huge) are not kept. */
 export const BODY_MAX_BYTES = 5_000_000
@@ -137,7 +137,8 @@ export class MailCache {
     if (version === SCHEMA_VERSION) return
     db.exec('BEGIN')
     try {
-      db.exec(SCHEMA)
+      // Version 1 has everything but the drafts table.
+      db.exec(version === 0 ? SCHEMA + DRAFTS : DRAFTS)
       db.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`)
       db.exec('COMMIT')
     } catch (err) {
@@ -716,6 +717,27 @@ export class MailCache {
   forgetAccount(a: string): void {
     this.guard(undefined, true, () => {
       this.run('DELETE FROM folders WHERE account_id = ?', a)
+      this.run('DELETE FROM drafts WHERE account_id = ?', a)
+    })
+  }
+
+  /** The UIDVALIDITY a draft's UID was handed out under, if it is remembered. */
+  draftValidity(a: string, uid: number): string | undefined {
+    return this.guard<string | undefined>(undefined, false, () =>
+      this.get<{ validity: string }>('SELECT validity FROM drafts WHERE account_id = ? AND uid = ?', a, uid)?.validity
+    )
+  }
+
+  /** Kept across restarts: a draft restored from the recovery copy still has the UID it was saved under. */
+  rememberDraft(a: string, uid: number, validity: string): void {
+    this.guard(undefined, true, () => {
+      this.run('INSERT OR REPLACE INTO drafts (account_id, uid, validity) VALUES (?, ?, ?)', a, uid, validity)
+    })
+  }
+
+  forgetDrafts(a: string, uids: number[]): void {
+    this.guard(undefined, true, () => {
+      for (const uid of uids) this.run('DELETE FROM drafts WHERE account_id = ? AND uid = ?', a, uid)
     })
   }
 
@@ -725,6 +747,9 @@ export class MailCache {
       const keep = new Set(accountIds)
       for (const r of this.all<{ account_id: string }>('SELECT DISTINCT account_id FROM folders')) {
         if (!keep.has(r.account_id)) this.run('DELETE FROM folders WHERE account_id = ?', r.account_id)
+      }
+      for (const r of this.all<{ account_id: string }>('SELECT DISTINCT account_id FROM drafts')) {
+        if (!keep.has(r.account_id)) this.run('DELETE FROM drafts WHERE account_id = ?', r.account_id)
       }
     })
   }
@@ -827,6 +852,15 @@ export class MailCache {
     } catch {}
   }
 }
+
+const DRAFTS = `
+CREATE TABLE drafts (
+  account_id TEXT NOT NULL,
+  uid        INTEGER NOT NULL,
+  validity   TEXT NOT NULL,
+  PRIMARY KEY (account_id, uid)
+);
+`
 
 const SCHEMA = `
 CREATE TABLE folders (
