@@ -38,11 +38,11 @@ export function createMockApi(): WinMailApi {
           id: 'icloud',
           provider: 'icloud',
           description: 'iCloud',
-          name: 'Pawel Niedzwiecki',
-          email: 'pawel@icloud.com',
-          username: 'pawel@icloud.com',
+          name: 'Alex Morgan',
+          email: 'alex.morgan@icloud.example',
+          username: 'alex.morgan@icloud.example',
           enabled: true,
-          signature: 'Pawel',
+          signature: 'Alex',
           imap: { host: 'imap.mail.me.com', port: 993, security: 'tls' },
           smtp: { host: 'smtp.mail.me.com', port: 587, security: 'starttls' }
         },
@@ -50,9 +50,9 @@ export function createMockApi(): WinMailApi {
           id: 'gmail',
           provider: 'gmail',
           description: 'Google',
-          name: 'Pawel Niedzwiecki',
-          email: 'pawel@gmail.com',
-          username: 'pawel@gmail.com',
+          name: 'Alex Morgan',
+          email: 'alex.morgan@gmail.example',
+          username: 'alex.morgan@gmail.example',
           enabled: true,
           imap: { host: 'imap.gmail.com', port: 993, security: 'tls' },
           smtp: { host: 'smtp.gmail.com', port: 465, security: 'tls' }
@@ -98,7 +98,7 @@ export function createMockApi(): WinMailApi {
       mailbox,
       uid: u,
       from: { name: from[0], email: from[1] },
-      to: [{ name: 'Pawel Niedzwiecki', email: `pawel@${accountId}.com` }],
+      to: [{ name: 'Alex Morgan', email: `alex.morgan@${accountId}.example` }],
       cc: [],
       bcc: [],
       replyTo: [],
@@ -120,32 +120,32 @@ export function createMockApi(): WinMailApi {
   }
 
   let messages: MessageDetail[] = [
-    msg('icloud', 'INBOX', ['Adam Baumgartner', 'adam@example.com'], 'Flat keys and move-in day',
-      'Hey,\n\nAgent says keys are ready from Friday. Can you do 10:00 at Old Station House? I can bring the van.\n\nAdam', 40, { flagged: true }),
+    msg('icloud', 'INBOX', ['Jamie Rivera', 'jamie.rivera@example.com'], 'Saturday hike',
+      'Hey,\n\nThe trail opens at 9. Shall we meet at the car park at 8:30? I can drive.\n\nJamie', 40, { flagged: true }),
     // A reply to the message above, so the list shows a conversation.
-    msg('icloud', 'INBOX', ['Adam Baumgartner', 'adam@example.com'], 'Re: Flat keys and move-in day',
-      'Actually 11:00 works better for the agent. Still fine for you?\n\nAdam', 8, { parents: [`<${uid}@mock>`] }),
-    msg('gmail', 'INBOX', ['Monzo', 'help@monzo.com'], 'Your October statement is ready',
-      'Hi Pawel, your statement for October is now available in the app.', 12, {
-        html: '<div style="font-family:sans-serif;max-width:560px"><h2 style="color:#14233c">Your statement is ready</h2><p>Hi Pawel,</p><p>Your statement for October is now available in the app. <a href="https://monzo.com">Open Monzo</a></p><img src="https://example.com/tracker.png" width="1" height="1"></div>',
-        unsubscribe: { url: 'https://monzo.example/unsubscribe', oneClick: true }
+    msg('icloud', 'INBOX', ['Jamie Rivera', 'jamie.rivera@example.com'], 'Re: Saturday hike',
+      'Actually 9:00 works better, the car park opens late. Still fine for you?\n\nJamie', 8, { parents: [`<${uid}@mock>`] }),
+    msg('gmail', 'INBOX', ['Northwind Bank', 'statements@northwind.example'], 'Your monthly statement is ready',
+      'Hi Alex, your statement for this month is now available in the app.', 12, {
+        html: '<div style="font-family:sans-serif;max-width:560px"><h2 style="color:#14233c">Your statement is ready</h2><p>Hi Alex,</p><p>Your statement for this month is now available in the app. <a href="https://northwind.example">Open Northwind</a></p><img src="https://example.com/tracker.png" width="1" height="1"></div>',
+        unsubscribe: { url: 'https://northwind.example/unsubscribe', oneClick: true }
       }),
-    msg('gmail', 'INBOX', ['GitHub', 'noreply@github.com'], '[bumbag] PR #42: Offline map caching',
-      'Review requested. 14 files changed, 612 additions, 88 deletions.\n\nhttps://github.com/pawel/bumbag/pull/42', 300, {
+    msg('gmail', 'INBOX', ['GitHub', 'noreply@github.com'], '[sample-app] PR #42: Offline caching',
+      'Review requested. 14 files changed, 612 additions, 88 deletions.\n\nhttps://github.com/example/sample-app/pull/42', 300, {
         seen: true, hasAttachments: true,
         attachments: [{ index: 0, filename: 'diff-summary.txt', contentType: 'text/plain', size: 4096 }]
       }),
-    msg('icloud', 'INBOX', ['Transport for London', 'contactless@tfl.gov.uk'], 'Your weekly journey summary',
+    msg('icloud', 'INBOX', ['City Transit', 'journeys@citytransit.example'], 'Your weekly journey summary',
       'You travelled 9 times this week.\n\nTotal charged: £27.40', 60 * 26, { seen: true }),
-    msg('gmail', 'INBOX', ['Sam, Acme Talent', 'talent@acme.example'], 'Senior React Native Engineer role',
-      'Hi Pawel,\n\nI came across your profile and think you could be a great fit. Hybrid, London Bridge.\n\nSam', 60 * 50, { seen: true, flagged: true }),
-    msg('icloud', 'Receipts', ['Apple', 'no_reply@email.apple.com'], 'Your receipt from Apple',
+    msg('gmail', 'INBOX', ['Taylor, Contoso Careers', 'careers@contoso.example'], 'Frontend Engineer role',
+      'Hi Alex,\n\nI came across your profile and think you could be a great fit. Hybrid, two days in the office.\n\nTaylor', 60 * 50, { seen: true, flagged: true }),
+    msg('icloud', 'Receipts', ['Fabrikam Store', 'orders@fabrikam.example'], 'Your receipt from Fabrikam',
       'Thanks for your purchase.', 60 * 24 * 9, { seen: true })
   ]
   // A reply to the first message, so conversations have something to group.
   messages.push(
-    msg('icloud', 'INBOX', ['Adam Baumgartner', 'adam@example.com'], 'Re: Flat keys and move-in day',
-      'Friday works. See you at 10.\n\nAdam', 20, { parents: [messages[0]!.messageId!] })
+    msg('icloud', 'INBOX', ['Jamie Rivera', 'jamie.rivera@example.com'], 'Re: Saturday hike',
+      'Saturday works. See you at 8:30.\n\nJamie', 20, { parents: [messages[0]!.messageId!] })
   )
 
   const summary = ({
@@ -209,9 +209,9 @@ export function createMockApi(): WinMailApi {
         provider: 'gmail',
         auth: 'oauth',
         description: 'Google (mock)',
-        name: 'Pawel Niedzwiecki',
-        email: `pawel.${accounts.length}@gmail.com`,
-        username: `pawel.${accounts.length}@gmail.com`,
+        name: 'Alex Morgan',
+        email: `alex.${accounts.length}@gmail.example`,
+        username: `alex.${accounts.length}@gmail.example`,
         enabled: true,
         imap: { host: 'imap.gmail.com', port: 993, security: 'tls' },
         smtp: { host: 'smtp.gmail.com', port: 465, security: 'tls' }
@@ -450,11 +450,11 @@ export function createMockApi(): WinMailApi {
     async listContacts() {
       await sleep(100)
       return [
-        { name: 'Adam Baumgartner', email: 'adam@example.com' },
-        { name: 'Sam, Acme Talent', email: 'talent@acme.example' },
-        { name: 'Anna Kowalska', email: 'anna.kowalska@gmail.com' },
-        { name: '', email: 'accounts@landlord.example' },
-        { name: 'Transport for London', email: 'contactless@tfl.gov.uk' }
+        { name: 'Jamie Rivera', email: 'jamie.rivera@example.com' },
+        { name: 'Taylor, Contoso Careers', email: 'careers@contoso.example' },
+        { name: 'Sam Patel', email: 'sam.patel@example.org' },
+        { name: '', email: 'accounts@lettings.example' },
+        { name: 'City Transit', email: 'journeys@citytransit.example' }
       ]
     },
     onMailChanged() {
