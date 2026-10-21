@@ -1,8 +1,10 @@
-import type { QueuedSend, ScheduledInfo, Settings } from '@shared/types'
-import type { ComposeSession } from './sessions'
+import type { MessageDetail, MessageSummary, QueuedSend, ScheduledInfo, Settings } from '@shared/types'
+import type { ComposeSession, ReplyMode } from './sessions'
 
 /** This page is a pop-out compose window: one card, no mailbox. */
 export const IS_POPOUT = location.hash === '#popout'
+/** This page is a message window: one message, opened by double-clicking it in the list. */
+export const IS_MESSAGE_WINDOW = location.hash === '#message'
 
 /** What the main window hands a new pop-out window. */
 export interface PopoutPayload {
@@ -21,3 +23,5 @@ export type PopoutMessage =
   | { type: 'scheduled'; info: ScheduledInfo; at: string; reply: ComposeSession['reply'] }
   | { type: 'discarded'; session: ComposeSession }
   | { type: 'settings'; settings: Settings }
+  /** From a message window: reply to, reply all or forward its message. */
+  | { type: 'reply'; mode: ReplyMode; summary: MessageSummary; detail: MessageDetail | null; allowRemote: boolean }

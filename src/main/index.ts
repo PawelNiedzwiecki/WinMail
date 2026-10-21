@@ -38,6 +38,12 @@ const POPOUT_MIN_HEIGHT = 420
 const POPOUT_BAR = 40
 /** Each further pop-out opens this far down and right of the last, so they don't hide each other. */
 const POPOUT_CASCADE = 28
+/** A message in a window of its own (double-click in the list). */
+const READER_WIDTH = 860
+const READER_HEIGHT = 780
+const READER_MIN_WIDTH = 480
+const READER_MIN_HEIGHT = 400
+const READER_BAR = 40
 /** A crashed page reloads at most this often before the window is left as it is. */
 const MAX_RELOADS = 3
 const RELOAD_WINDOW_MS = 60_000
@@ -47,6 +53,8 @@ let outbox: Outbox | null = null
 let mainWin: BrowserWindow | null = null
 /** Pop-out compose windows by web contents id, with what each was opened with. */
 const popouts = new Map<number, { win: BrowserWindow; payload: unknown }>()
+/** Message windows by web contents id, with the message each shows. */
+const readers = new Map<number, { win: BrowserWindow; summary: MessageSummary }>()
 const mainWindow = () => (mainWin && !mainWin.isDestroyed() ? mainWin : null)
 /** Windows whose renderer has saved its drafts, or can't, so they may close. */
 const mayClose = new WeakSet<BrowserWindow>()
@@ -213,46 +221,91 @@ function createWindow(): BrowserWindow {
   win.once('ready-to-show', () => win.show())
 
   wireWindow(win)
-  // Pop-out compose windows belong to this one: they close with it, each saving its draft first.
+  // Pop-out compose and message windows belong to this one: they close with it, each saving its draft first.
   win.on('closed', () => {
-    for (const { win: p } of popouts.values()) if (!p.isDestroyed()) p.close()
+    for (const { win: p } of [...popouts.values(), ...readers.values()]) if (!p.isDestroyed()) p.close()
   })
   loadRenderer(win)
   return win
 }
 
-/** Opens a compose card in a window of its own, a little below and right of the last one. */
-function createPopout(payload: unknown): void {
+/**
+ * A secondary window over the middle of the main one, the `index`-th a little below and right of
+ * the one before, kept on the screen.
+ */
+interface ChildSize {
+  width: number
+  height: number
+  minWidth: number
+  minHeight: number
+  /** Height of the title bar the page draws under the window buttons. */
+  bar: number
+}
+
+function childWindow(title: string, size: ChildSize, index: number): BrowserWindow {
   const parent = mainWindow()
   const area = screen.getDisplayMatching(parent?.getBounds() ?? screen.getPrimaryDisplay().bounds).workArea
-  const width = Math.min(POPOUT_WIDTH, area.width)
-  const height = Math.min(POPOUT_HEIGHT, area.height)
+  const width = Math.min(size.width, area.width)
+  const height = Math.min(size.height, area.height)
   const around = parent?.getBounds() ?? area
-  const shift = (popouts.size % 6) * POPOUT_CASCADE
+  const shift = (index % 6) * POPOUT_CASCADE
   const x = Math.round(around.x + (around.width - width) / 2 + shift)
   const y = Math.round(around.y + (around.height - height) / 2 + shift)
 
-  const win = new BrowserWindow({
+  return new BrowserWindow({
     width,
     height,
     x: Math.max(area.x, Math.min(x, area.x + area.width - width)),
     y: Math.max(area.y, Math.min(y, area.y + area.height - height)),
-    minWidth: Math.min(POPOUT_MIN_WIDTH, width),
-    minHeight: Math.min(POPOUT_MIN_HEIGHT, height),
+    minWidth: Math.min(size.minWidth, width),
+    minHeight: Math.min(size.minHeight, height),
     show: false,
-    title: 'New Message',
+    title,
     titleBarStyle: 'hidden',
-    titleBarOverlay: isWin ? overlay(POPOUT_BAR) : undefined,
+    titleBarOverlay: isWin ? overlay(size.bar) : undefined,
     backgroundMaterial: mica ? 'mica' : undefined,
     backgroundColor: mica ? '#00000000' : undefined,
     webPreferences: webPreferences()
   })
+}
+
+/** Opens a compose card in a window of its own, a little below and right of the last one. */
+function createPopout(payload: unknown): void {
+  const win = childWindow(
+    'New Message',
+    { width: POPOUT_WIDTH, height: POPOUT_HEIGHT, minWidth: POPOUT_MIN_WIDTH, minHeight: POPOUT_MIN_HEIGHT, bar: POPOUT_BAR },
+    popouts.size
+  )
   const id = win.webContents.id
   popouts.set(id, { win, payload })
   win.on('closed', () => popouts.delete(id))
   win.once('ready-to-show', () => win.show())
   wireWindow(win, POPOUT_BAR)
   loadRenderer(win, 'popout')
+}
+
+/** Opens a message in a window of its own, or brings forward the window already showing it. */
+function openReader(summary: MessageSummary): void {
+  if (!summary || typeof summary.key !== 'string' || typeof summary.accountId !== 'string') {
+    throw new Error('No message to open.')
+  }
+  for (const r of readers.values()) {
+    if (r.summary.key !== summary.key || r.win.isDestroyed()) continue
+    if (r.win.isMinimized()) r.win.restore()
+    r.win.focus()
+    return
+  }
+  const win = childWindow(
+    summary.subject || 'Message',
+    { width: READER_WIDTH, height: READER_HEIGHT, minWidth: READER_MIN_WIDTH, minHeight: READER_MIN_HEIGHT, bar: READER_BAR },
+    readers.size
+  )
+  const id = win.webContents.id
+  readers.set(id, { win, summary })
+  win.on('closed', () => readers.delete(id))
+  win.once('ready-to-show', () => win.show())
+  wireWindow(win, READER_BAR)
+  loadRenderer(win, 'message')
 }
 
 /** The compose session id inside a pop-out payload (`{ session: { id } }`), if it has one. */
@@ -277,10 +330,17 @@ function registerPopouts(): void {
     })
   )
   ipcMain.handle('popout:payload', (e) => answer(() => popouts.get(e.sender.id)?.payload ?? null))
+  ipcMain.handle('reader:open', (e, summary: MessageSummary) =>
+    answer(() => {
+      if (e.sender !== mainWindow()?.webContents) throw new Error('Message windows open from the main window.')
+      openReader(summary)
+    })
+  )
+  ipcMain.handle('reader:payload', (e) => answer(() => readers.get(e.sender.id)?.summary ?? null))
   ipcMain.handle('popout:list', () => answer(() => [...popouts.values()].map((p) => idOf(p.payload)).filter(Boolean)))
-  // Only a pop-out speaks to the main window this way; the main window has its own channels.
+  // Only pop-outs and message windows speak to the main window this way; it has its own channels.
   ipcMain.on('popout:send', (e, message: unknown) => {
-    if (popouts.has(e.sender.id)) mainWindow()?.webContents.send('popout:message', message)
+    if (popouts.has(e.sender.id) || readers.has(e.sender.id)) mainWindow()?.webContents.send('popout:message', message)
   })
 }
 

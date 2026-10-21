@@ -1286,7 +1286,9 @@ export default function App() {
               onSelect={onSelectRow}
               onOpen={(key) => {
                 const m = visible.find((x) => x.key === key)
-                if (m && isDraftsBox(m)) void openFromDrafts(m)
+                if (!m) return
+                if (isDraftsBox(m)) void openFromDrafts(m)
+                else api.openMessageWindow(m).catch(showError)
               }}
               onContextMenu={(key, x, y) => setMenu({ key, x, y })}
               onLoadMore={() => {
