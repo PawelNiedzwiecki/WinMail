@@ -229,23 +229,7 @@ export function MessageView({
           </div>
         </Collapse>
 
-        {error && <div className="list-error">{error}</div>}
-        {!detail && !error && <MessageSkeleton />}
-
-        {detail &&
-          (detail.html ? (
-            <div className={`msg-body-html ${dark ? 'is-dark' : ''}`}>
-              <HtmlBody html={detail.html} allowRemote={allowRemote} dark={dark} />
-            </div>
-          ) : (
-            // Plain text follows the app unless the setting asks for the other look.
-            <article
-              className={`msg-body ${dark === appDark ? '' : `msg-body-card ${dark ? 'is-dark' : 'is-light'}`}`}
-            >
-              {linkify(detail.text)}
-            </article>
-          ))}
-
+        {/* Attachments sit above the body, so they're found without scrolling past a long message. */}
         {detail && detail.attachments.length > 0 && (
           <div className="attachments">
             {detail.attachments.map((a) => (
@@ -262,6 +246,23 @@ export function MessageView({
             ))}
           </div>
         )}
+
+        {error && <div className="list-error">{error}</div>}
+        {!detail && !error && <MessageSkeleton />}
+
+        {detail &&
+          (detail.html ? (
+            <div className={`msg-body-html ${dark ? 'is-dark' : ''}`}>
+              <HtmlBody html={detail.html} allowRemote={allowRemote} dark={dark} />
+            </div>
+          ) : (
+            // Plain text follows the app unless the setting asks for the other look.
+            <article
+              className={`msg-body ${dark === appDark ? '' : `msg-body-card ${dark ? 'is-dark' : 'is-light'}`}`}
+            >
+              {linkify(detail.text)}
+            </article>
+          ))}
 
         {/* Stays mounted while the message loads, so a reply being written is never lost. */}
         {isDraft ? (

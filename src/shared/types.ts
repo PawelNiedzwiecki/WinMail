@@ -435,4 +435,9 @@ export interface WinMailApi {
   /** In a pop-out window: tells the main window something, e.g. to take the card back. */
   popoutSend(message: unknown): void
   onPopoutMessage(cb: (message: unknown) => void): () => void
+
+  /** Opens a message in a window of its own (double-click in the list), or focuses the one showing it. */
+  openMessageWindow(summary: MessageSummary): Promise<void>
+  /** In a message window: the message it shows. */
+  messageWindowPayload(): Promise<MessageSummary | null>
 }

@@ -110,7 +110,10 @@ const api: WinMailApi = {
   popoutPayload: () => call('popout:payload'),
   listPopouts: () => call('popout:list'),
   popoutSend: (message) => ipcRenderer.send('popout:send', message),
-  onPopoutMessage: (cb) => on('popout:message', cb)
+  onPopoutMessage: (cb) => on('popout:message', cb),
+
+  openMessageWindow: (summary) => call('reader:open', summary),
+  messageWindowPayload: () => call('reader:payload')
 }
 
 contextBridge.exposeInMainWorld('winmail', api)

@@ -414,7 +414,8 @@ export async function reply(
   mode: ReplyMode,
   summary: MessageSummary,
   detail: MessageDetail | null,
-  allowRemote: boolean
+  allowRemote: boolean,
+  host: ComposeSession['host'] = REPLY_HOST
 ): Promise<string | null> {
   const existing = allSessions().find((s) => s.reply?.key === summary.key && !s.hidden)
   if (existing) {
@@ -424,7 +425,7 @@ export async function reply(
     return existing.id
   }
   // Leave any other inline reply first: there is one slot under the message.
-  for (const o of allSessions()) if (o.host === 'inline' && !o.hidden) leaveInline(o.id)
+  if (host === 'inline') for (const o of allSessions()) if (o.host === 'inline' && !o.hidden) leaveInline(o.id)
 
   const src = detail ?? (await api.getMessage(summary.accountId, summary.mailbox, summary.uid).catch(() => null))
   const accountId = env.accounts.some((a) => a.id === summary.accountId) ? summary.accountId : env.defaultAccountId()
@@ -433,7 +434,7 @@ export async function reply(
   const plain = env.settings.composeFormat === 'plain'
   const start = startBody(accountId, plain, false)
   const s = blank(accountId, {
-    host: REPLY_HOST,
+    host,
     to: parts.to,
     cc: parts.cc,
     showCc: parts.showCc,
@@ -997,7 +998,18 @@ export function startPopoutEvents(): () => void {
     else if (m.type === 'scheduled') scheduledToast(m.info, new Date(m.at), m.reply)
     else if (m.type === 'discarded') discardedToast(m.session)
     else if (m.type === 'settings') env.setSettings(m.settings)
+    else if (m.type === 'reply') void replyInWindow(m)
   })
+}
+
+/**
+ * Main window: a message window asked for a reply. It opens in a compose window of its own, next to
+ * the message; a reply already being written in the dock is brought forward instead.
+ */
+async function replyInWindow(m: Extract<PopoutMessage, { type: 'reply' }>): Promise<void> {
+  const open = allSessions().some((s) => s.reply?.key === m.summary.key && !s.hidden)
+  const id = await reply(m.mode, m.summary, m.detail, m.allowRemote, 'docked')
+  if (id && !open) await openInWindow(id)
 }
 
 /** Pop-out window: the settings with new templates, merged into what is saved so other changes survive. */

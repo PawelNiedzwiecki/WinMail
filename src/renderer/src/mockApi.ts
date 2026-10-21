@@ -492,6 +492,12 @@ export function createMockApi(): WinMailApi {
     popoutSend() {},
     onPopoutMessage() {
       return () => {}
+    },
+    async openMessageWindow() {
+      throw new Error('Message windows need the desktop app.')
+    },
+    async messageWindowPayload() {
+      return null
     }
   }
   return api

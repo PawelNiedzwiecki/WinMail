@@ -688,6 +688,8 @@ body.resizing iframe {
 .viewer {
   flex: 1;
   min-width: 0;
+  /* In the column-flex .reader: without this the pane grows to the message's height and never scrolls. */
+  min-height: 0;
   display: flex;
   background: var(--surface);
 }
@@ -696,6 +698,30 @@ body.resizing iframe {
   overflow-y: auto;
   padding: 22px 28px 40px;
   user-select: text;
+}
+/* A message in a window of its own: a title bar to drag, then the reading pane. */
+.message-window {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  background: var(--surface);
+}
+.message-window-head {
+  height: 40px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  padding: 0 calc(var(--wco-right) + 12px) 0 16px;
+  border-bottom: 1px solid var(--hairline);
+  -webkit-app-region: drag;
+}
+.message-window-title {
+  flex: 1;
+  min-width: 0;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .viewer-empty {
   flex-direction: column;
@@ -773,7 +799,7 @@ body.resizing iframe {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
-  margin-top: 20px;
+  margin-top: 14px;
 }
 .attachment {
   display: flex;

@@ -77,7 +77,7 @@ New methods added by roadmap items are listed in the changelog entry that introd
 
 **Message list.** Newest 60 per folder (unified inbox merges accounts by date); "Load Older Messages" raises the limit by 60. Rows show sender, date, subject, preview, unread dot, flag, attachment clip, account label in unified view. Right-click menu: reply, reply all, forward, read/unread, flag, move to inbox, archive, Move to…, Snooze…, junk, delete. Older messages load on scroll. Optional conversation grouping with a count badge. Multi-select with Ctrl/Shift-click. Search filters loaded messages at once, then searches the server (Gmail operators on Google). Gmail inboxes have category tabs.
 
-**Reading.** HTML sanitised with DOMPurify in a sandboxed iframe; remote content blocked until allowed (or setting on). Message appearance light/dark/same as app. Plain text linkified. Attachments listed, click to save. Opening marks read (the whole conversation when grouped). More menu: Print, Show Original, Summarise (Claude key), Move to, Snooze. Mailing lists get an Unsubscribe banner.
+**Reading.** HTML sanitised with DOMPurify in a sandboxed iframe; remote content blocked until allowed (or setting on). Message appearance light/dark/same as app. Plain text linkified. Attachments listed above the body, click to save. Double-click a message in the list to open it in its own window. Opening marks read (the whole conversation when grouped). More menu: Print, Show Original, Summarise (Claude key), Move to, Snooze. Mailing lists get an Unsubscribe banner.
 
 **Compose.** Docked cards (bottom right; minimize, full screen, several at once) and inline replies under the message. Recipient chips (To, Cc, Bcc), From when several accounts, rich text or plain text, attachments, signature, templates. Reply uses Reply-To when present; reply all drops yourself and never uses the original Bcc. Drafts autosave to the Drafts folder; Esc or Ctrl+W saves and closes; Ctrl+Enter sends after the undo delay. See COMPOSE.md.
 
@@ -90,6 +90,13 @@ New methods added by roadmap items are listed in the changelog entry that introd
 **Shortcuts.** Ctrl+N new, Ctrl+R reply, Ctrl+Shift+R reply all, Ctrl+Shift+F forward, Ctrl+F search, Ctrl+, settings, Del delete, Up/Down move selection (Shift extends), Ctrl+A select all, Ctrl+Enter send, Esc close. Optional Gmail keys: j/k, e, #, !, r, a, f, s, Shift+I/U, x, b, v, z, c, /.
 
 ## 6. Changelog
+
+### 2026-10-21 — Message windows, attachments on top, reading pane scrolls again
+- **Fix:** the reading pane didn't scroll. The toolbar refactor put `MessageView` in the column-flex `.reader`, and `.viewer` had no `min-height: 0`, so it grew to the message's height and was clipped. Checked in mock mode: before, the pane was taller than its space with no scroll; after, it scrolls, also with the wheel over an HTML body.
+- **Double-click a message** in the list to open it in a window of its own (drafts still open in compose). The same message again brings its window forward; message windows close with the main window. Reply, Reply All and Forward there open a compose window via the main window (`PopoutMessage` `reply`, `replyInWindow` in `compose/actions.ts`; `reply()` takes a `host`). The More menu has Print.
+- **Attachments** are listed above the message body instead of below it.
+- New: `components/MessageWindow.tsx` (page `#message`), `openReader` / `childWindow` in `main/index.ts` (pop-outs share `childWindow`). API: `openMessageWindow` (`reader:open`, main window only), `messageWindowPayload` (`reader:payload`); message windows may use `popoutSend`.
+- Checked in Electron with Playwright: the window opens with the message, de-duplicates, closes at once and with the main window. Not checked with a real account: loading a real message, replying from the window.
 
 ### 2026-10-21 — Notifications redesign (details in NOTIFICATIONS.md)
 - New `main/notifications.ts` (`Notifier`) replaces the inline `announce` in `index.ts`: avatar drawn by the renderer (`notifyArt.ts`), inline reply via `Outbox.queue`, Archive / Mark as read buttons, summary toast, account headers when several accounts are on.
@@ -179,10 +186,10 @@ Status: `[x]` done, `[ ]` planned. *Gmail-only* items only apply to Google accou
 - Confidential mode, Chat/Meet/Spaces: Google services, not mail.
 - Server-side filters UI and vacation responder: need the Gmail API or per-provider Sieve.
 - Outlook: needs Microsoft OAuth (tracked separately).
-- double click should open the mail in new window
-- mails are not scrollable
+- ~~double click should open the mail in new window~~ done 2026-10-21
+- ~~mails are not scrollable~~ fixed 2026-10-21
 - labels in mails
 - integrating AI to summarise mails or search specific criteria
-- picking up attachments at the top of the mail
+- ~~picking up attachments at the top of the mail~~ done 2026-10-21
 - picking up any additional events etc.
 - ~~redesign notifications~~ done 2026-10-21 (NOTIFICATIONS.md)
