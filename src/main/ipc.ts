@@ -10,6 +10,7 @@ import type {
 } from '../shared/types'
 import type { MailService } from './mail'
 import type { Store } from './store'
+import type { MailCache } from './cache'
 import { cancelSignIn, revoke } from './google'
 import type { Contacts } from './contacts'
 import type { Outbox } from './outbox'
@@ -53,7 +54,7 @@ async function printHtml(html: string): Promise<void> {
   }
 }
 
-export function registerIpc(store: Store, mail: MailService, contacts: Contacts, outbox: Outbox): void {
+export function registerIpc(store: Store, mail: MailService, contacts: Contacts, outbox: Outbox, cache: MailCache): void {
   const attachments = new AttachmentGrants([store.outboxDir, TEMP_ROOT])
 
   handle('accounts:list', () => store.listAccounts())
@@ -69,11 +70,17 @@ export function registerIpc(store: Store, mail: MailService, contacts: Contacts,
       before.enabled !== acc.enabled ||
       JSON.stringify([before.imap, before.smtp]) !== JSON.stringify([acc.imap, acc.smtp])
     if (server) await mail.disconnect(acc.id)
+    // A different server or login is a different mailbox; any other change still points at the same one.
+    const sameBox = (x: string, y: string) => x.toLowerCase() === y.toLowerCase()
+    if (!sameBox(before.imap.host, acc.imap.host) || before.imap.port !== acc.imap.port || !sameBox(before.username, acc.username)) {
+      cache.forgetAccount(acc.id)
+    }
     if (u.password) contacts.rescan(acc.id)
     return acc
   })
   handle('accounts:remove', async (id: string) => {
     await mail.disconnect(id)
+    cache.forgetAccount(id)
     if (store.listAccounts().find((a) => a.id === id)?.auth === 'oauth') void revoke(store.getPassword(id))
     store.removeAccount(id)
   })

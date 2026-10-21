@@ -13,6 +13,7 @@ import { join } from 'path'
 import { release } from 'os'
 import { Store } from './store'
 import { MailService } from './mail'
+import { MailCache } from './cache'
 import { registerIpc } from './ipc'
 import { Contacts } from './contacts'
 import { Outbox } from './outbox'
@@ -50,6 +51,7 @@ const RELOAD_WINDOW_MS = 60_000
 
 let mail: MailService | null = null
 let outbox: Outbox | null = null
+let cache: MailCache | null = null
 let mainWin: BrowserWindow | null = null
 /** Pop-out compose windows by web contents id, with what each was opened with. */
 const popouts = new Map<number, { win: BrowserWindow; payload: unknown }>()
@@ -382,8 +384,10 @@ if (!app.requestSingleInstanceLock()) {
     // The notifier needs the outbox, which needs the mail service; it is set just below.
     let notifier: Notifier | null = null
     const announce = (accountId: string, list: MessageSummary[]) => void notifier?.announce(accountId, list)
+    const mailCache = (cache = new MailCache())
     const mailService = new MailService(
       store,
+      mailCache,
       (e) => send('mail:changed', e),
       (e) => send('mail:progress', e),
       announce
@@ -408,7 +412,7 @@ if (!app.requestSingleInstanceLock()) {
       changed: (e) => send('mail:changed', e)
     })
     setMenu()
-    registerIpc(store, mailService, contacts, queue)
+    registerIpc(store, mailService, contacts, queue, mailCache)
     ipcMain.on('app:close-ready', (e) => {
       const w = BrowserWindow.fromWebContents(e.sender)
       if (!w) return
@@ -428,6 +432,7 @@ if (!app.requestSingleInstanceLock()) {
     const win = (mainWin = createWindow())
     // Let the first mailbox load finish before scanning mail for contacts.
     setTimeout(() => void contacts.scan(), CONTACTS_SCAN_DELAY_MS)
+    setTimeout(() => mailCache.prune(store.listAccounts().map((a) => a.id)), CONTACTS_SCAN_DELAY_MS)
     if (store.recoveredFrom) {
       const backup = store.recoveredFrom
       win.once('ready-to-show', () =>
@@ -456,7 +461,10 @@ app.on('before-quit', (e) => {
     await mail?.disconnectAll()
   })()
   const deadline = new Promise((resolve) => setTimeout(resolve, QUIT_TIMEOUT_MS))
-  void Promise.race([work, deadline]).finally(() => app.exit(0))
+  void Promise.race([work, deadline]).finally(() => {
+    cache?.close()
+    app.exit(0)
+  })
 })
 
 app.on('window-all-closed', () => {

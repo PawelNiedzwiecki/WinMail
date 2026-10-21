@@ -32,6 +32,7 @@ import type {
 } from '../shared/types'
 import { getProvider } from '../shared/providers'
 import { categorize } from '../shared/categorize'
+import type { MailCache, SnapState } from './cache'
 import type { Snoozed, Store } from './store'
 import { decodeCharset, decodeTransfer, htmlToText, makePreview } from './text'
 import { GoogleTokens, REAUTH_MESSAGE, signIn as googleSignIn } from './google'
@@ -125,6 +126,8 @@ const SPECIAL_ORDER: SpecialUse[] = [
   'all',
   'flagged'
 ]
+
+const REFUSED_FLAGS = 'The server refused to change the flags.'
 
 /** Folder WinMail creates for snoozed mail. */
 export const SNOOZE_FOLDER = 'WinMail Snoozed'
@@ -231,6 +234,22 @@ function inlineImages(html: string): { html: string; parts: Mail.Attachment[] } 
   return { html: out, parts }
 }
 
+/**
+ * A fetch also returns rows the server volunteered (a flag change on some other message, sometimes without a UID),
+ * and may split one message over several rows. Merges those and keeps only messages that were asked for, with
+ * their envelope, so nothing half-empty is ever saved. `uids` is the UID list that was requested, if it was one.
+ */
+function onlyAsked<T extends { uid?: number; envelope?: unknown }>(rows: T[], uids: string | null): T[] {
+  const asked = uids && /^[\d,]+$/.test(uids) ? new Set(uids.split(',').map(Number)) : null
+  const byUid = new Map<number, T>()
+  for (const r of rows) {
+    if (r.uid === undefined || (asked && !asked.has(r.uid))) continue
+    const have = byUid.get(r.uid)
+    byUid.set(r.uid, have ? Object.assign(have, r) : r)
+  }
+  return [...byUid.values()].filter((r) => r.envelope)
+}
+
 /** Previews kept in memory; oldest are dropped first. */
 const MAX_PREVIEWS = 5000
 
@@ -267,6 +286,7 @@ export class MailService {
 
   constructor(
     private store: Store,
+    private cache: MailCache,
     private emit: (e: MailChangedEvent) => void,
     private progress: (e: MailProgressEvent) => void = () => {},
     /** Unread messages that arrived in an inbox since the last check. */
@@ -526,7 +546,9 @@ export class MailService {
     this.specialPaths.set(accountId, special)
 
     const rank = (m: MailboxInfo) => (m.specialUse ? SPECIAL_ORDER.indexOf(m.specialUse) : 99)
-    return out.sort((a, b) => rank(a) - rank(b) || a.path.localeCompare(b.path))
+    const sorted = out.sort((a, b) => rank(a) - rank(b) || a.path.localeCompare(b.path))
+    this.cache.saveMailboxes(accountId, sorted, new Map())
+    return sorted
   }
 
   private async specialPath(accountId: string, use: SpecialUse): Promise<string | undefined> {
@@ -543,7 +565,21 @@ export class MailService {
   async listMessages(accountId: string, path: string, limit = 60): Promise<MessageSummary[]> {
     const { list, fresh } = await this.withMailbox(accountId, path, async (c) => {
       const mb = c.mailbox
-      if (!mb || !mb.exists) return { list: [], fresh: [] }
+      if (!mb) return { list: [], fresh: [] }
+
+      // What the server looked like at the start; the saved copy is stamped with this, not with what it is at the end.
+      const snap: SnapState = {
+        uidValidity: String(mb.uidValidity),
+        uidNext: mb.uidNext,
+        messages: mb.exists,
+        modseq: c.enabled.has('CONDSTORE') && !mb.noModseq && mb.highestModseq !== undefined ? String(mb.highestModseq) : null
+      }
+      this.cache.ensureFolder(accountId, path)
+      const gen = this.cache.state(accountId, path)?.gen ?? -1
+      if (!mb.exists) {
+        this.cache.replaceWindow(accountId, path, gen, [], snap)
+        return { list: [], fresh: [] }
+      }
 
       // Count arrivals since the last listing so the UI can say "Downloading 3 new messages".
       const box = `${accountId}|${path}|${mb.uidValidity}`
@@ -557,6 +593,7 @@ export class MailService {
       try {
         const list = await this.fetchSummaries(c, accountId, path, `${Math.max(1, mb.exists - limit + 1)}:*`, false)
         this.newestUid.set(box, list.reduce((max, m) => Math.max(max, m.uid), last ?? 0))
+        this.cache.replaceWindow(accountId, path, gen, list, snap)
         const fresh = path === this.inboxOf(accountId) ? await this.unannounced(c, accountId) : []
         return { list, fresh }
       } finally {
@@ -629,18 +666,21 @@ export class MailService {
   ): Promise<MessageSummary[]> {
     const mb = c.mailbox
     if (!mb) return []
-    const rows = await c.fetchAll(
-      range,
-      {
-        uid: true,
-        envelope: true,
-        flags: true,
-        internalDate: true,
-        bodyStructure: true,
-        threadId: true,
-        headers: ['references', 'list-id', 'list-unsubscribe', 'precedence', 'auto-submitted']
-      },
-      { uid: byUid }
+    const rows = onlyAsked(
+      await c.fetchAll(
+        range,
+        {
+          uid: true,
+          envelope: true,
+          flags: true,
+          internalDate: true,
+          bodyStructure: true,
+          threadId: true,
+          headers: ['references', 'list-id', 'list-unsubscribe', 'precedence', 'auto-submitted']
+        },
+        { uid: byUid }
+      ),
+      byUid ? range : null
     )
 
     const cacheKey = (uid: number) => `${accountId}|${path}|${mb.uidValidity}|${uid}`
@@ -727,7 +767,7 @@ export class MailService {
 
       const text = p.text ?? (p.html ? htmlToText(p.html) : '')
       const refs = p.references ? (Array.isArray(p.references) ? p.references : [p.references]) : []
-      return {
+      const detail: MessageDetail = {
         key: `${accountId}|${path}|${uid}`,
         accountId,
         mailbox: path,
@@ -760,6 +800,8 @@ export class MailService {
             size: a.size
           }))
       }
+      this.cache.saveBody(accountId, path, uid, detail, String(c.mailbox && c.mailbox.uidValidity))
+      return detail
     })
   }
 
@@ -799,14 +841,19 @@ export class MailService {
       if (flags.seen !== undefined) (flags.seen ? add : remove).push('\\Seen')
       if (flags.flagged !== undefined) (flags.flagged ? add : remove).push('\\Flagged')
       const range = uids.join(',')
-      if (add.length) await c.messageFlagsAdd(range, add, { uid: true })
-      if (remove.length) await c.messageFlagsRemove(range, remove, { uid: true })
+      // imapflow answers false, rather than throwing, when the server says no.
+      if (add.length && !(await c.messageFlagsAdd(range, add, { uid: true }))) throw new Error(REFUSED_FLAGS)
+      if (remove.length && !(await c.messageFlagsRemove(range, remove, { uid: true }))) throw new Error(REFUSED_FLAGS)
+      this.cache.setFlags(accountId, path, uids, flags)
     })
   }
 
   async markAllRead(accountId: string, path: string): Promise<void> {
     await this.withMailbox(accountId, path, async (c) => {
-      if (c.mailbox && c.mailbox.exists) await c.messageFlagsAdd({ seen: false }, ['\\Seen'])
+      if (!c.mailbox || !c.mailbox.exists) return
+      // False can also mean nothing was unread; either way the next sync reads the flags again.
+      if (await c.messageFlagsAdd({ seen: false }, ['\\Seen'])) this.cache.markAllRead(accountId, path)
+      else this.cache.clearCheckpoint(accountId, path)
     })
   }
 
@@ -818,7 +865,10 @@ export class MailService {
 
     if (dest === path) {
       if (target === 'trash') {
-        await this.withMailbox(accountId, path, (c) => c.messageDelete(uids.join(','), { uid: true }))
+        await this.withMailbox(accountId, path, async (c) => {
+          if (!(await c.messageDelete(uids.join(','), { uid: true }))) throw new Error('The server refused to delete the message.')
+          this.cache.remove(accountId, path, uids)
+        })
       }
       return null
     }
@@ -831,6 +881,7 @@ export class MailService {
       const res = await c.messageMove(uids.join(','), dest, { uid: true })
       if (!res) throw new Error('The server refused to move the message.')
       const moved = uids.map((u) => res.uidMap?.get(u)).filter((u): u is number => u !== undefined)
+      this.cache.moved(accountId, path, uids, res.destination, res.uidMap, res.uidValidity === undefined ? undefined : String(res.uidValidity))
       return moved.length === uids.length ? { path: res.destination, uids: moved } : null
     })
   }
@@ -877,7 +928,7 @@ export class MailService {
             const uids = (await c.search({ header: { 'message-id': s.messageId } }, { uid: true })) || []
             if (uids.length) {
               await c.messageFlagsRemove(uids.join(','), ['\\Seen'], { uid: true })
-              await c.messageMove(uids.join(','), inbox, { uid: true })
+              if (await c.messageMove(uids.join(','), inbox, { uid: true })) this.cache.remove(accountId, folder, uids)
             }
             done.add(s)
           }
@@ -1060,6 +1111,7 @@ export class MailService {
           }
         }
       })
+      this.cache.remove(accountId, drafts, all)
       this.staleDrafts.delete(accountId)
     } catch (err) {
       this.staleDrafts.set(accountId, new Set(all))
