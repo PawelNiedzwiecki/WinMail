@@ -119,6 +119,37 @@ async function fetchBox(
   return { items: all.filter((m) => of(m) === cat), raw: all.length }
 }
 
+/**
+ * What is saved on this PC for one mailbox, in the same shape as `fetchBox`; null when nothing is
+ * saved or it cannot be read. Never waits for the server.
+ */
+async function cachedBox(
+  account: Account | undefined,
+  path: string,
+  max: number,
+  cat: GmailCategory | null,
+  accountId = account?.id ?? ''
+): Promise<{ items: MessageSummary[]; raw: number } | null> {
+  try {
+    const gmailTab = cat && account?.provider === 'gmail'
+    const saved = await api.cachedList(accountId, path, max, gmailTab ? `category:${cat}` : undefined)
+    if (!saved) return null
+    // As in fetchBox, `raw` says whether the server had more than was returned.
+    const raw = saved.more ? max : saved.messages.length
+    if (!cat || gmailTab) return { items: saved.messages, raw }
+    const of = (m: MessageSummary) => m.category ?? categorize({ email: m.from.email, subject: m.subject })
+    return { items: saved.messages.filter((m) => of(m) === cat), raw }
+  } catch {
+    return null
+  }
+}
+
+/** A folder's UIDs were renumbered: nothing remembered about its messages can be trusted. */
+function forgetFolder(accountId: string, path: string) {
+  for (const k of [...listCache.keys()]) if (k.startsWith(`${accountId}/${path}|`) || k.startsWith('all:')) listCache.delete(k)
+  for (const k of [...detailCache.keys()]) if (k.startsWith(`${accountId}|${path}|`)) detailCache.delete(k)
+}
+
 /** Identifies one message list: what is selected, the inbox tab, and which accounts it spans. */
 function listKeyOf(sel: Selection, list: Account[], cat: GmailCategory | null): string {
   const where = sel.kind === 'mailbox' ? `${sel.accountId}/${sel.path}` : `all:${list.filter((a) => a.enabled).map((a) => a.id).join(',')}`
@@ -155,11 +186,11 @@ type Dialog =
   | { kind: 'scheduled' }
 
 /** Splits messages by the folder they are in, since IMAP acts on one folder at a time. */
-function byFolder(items: MessageSummary[]): { accountId: string; mailbox: string; uids: number[] }[] {
-  const groups = new Map<string, { accountId: string; mailbox: string; uids: number[] }>()
+function byFolder(items: MessageSummary[]): { accountId: string; mailbox: string; uids: number[]; uidValidity?: string }[] {
+  const groups = new Map<string, { accountId: string; mailbox: string; uids: number[]; uidValidity?: string }>()
   for (const m of items) {
     const k = `${m.accountId}|${m.mailbox}`
-    const g = groups.get(k) ?? { accountId: m.accountId, mailbox: m.mailbox, uids: [] }
+    const g = groups.get(k) ?? { accountId: m.accountId, mailbox: m.mailbox, uids: [], uidValidity: m.uidValidity }
     g.uids.push(m.uid)
     groups.set(k, g)
   }
@@ -253,6 +284,27 @@ export default function App() {
     )
   }, [])
 
+  /** The lists the selection spans, as saved on this PC; null unless every one of them is saved. */
+  const savedList = useCallback(
+    async (sel: Selection, list: Account[], boxes: Record<string, MailboxInfo[]>, max: number, cat: GmailCategory | null) => {
+      if (sel.kind === 'mailbox') {
+        const got = await cachedBox(list.find((a) => a.id === sel.accountId), sel.path, max, cat, sel.accountId)
+        return got && { result: got.items, more: got.raw >= max, byAccount: { [sel.accountId]: got.items } }
+      }
+      const targets = list.filter((a) => a.enabled)
+      const got = await Promise.all(targets.map((a) => cachedBox(a, inboxPath(boxes[a.id]), max, cat)))
+      if (!targets.length || got.some((g) => !g)) return null
+      const byAccount: Record<string, MessageSummary[]> = {}
+      targets.forEach((a, i) => (byAccount[a.id] = got[i]!.items))
+      return {
+        result: got.flatMap((g) => g!.items).sort((a, b) => b.date.localeCompare(a.date)),
+        more: got.some((g) => g!.raw >= max),
+        byAccount
+      }
+    },
+    []
+  )
+
   const listReq = useRef(0)
   /** The cache key of the list on screen; null while it holds nothing worth keeping. */
   const shownKey = useRef<string | null>(null)
@@ -263,15 +315,31 @@ export default function App() {
       boxes: Record<string, MailboxInfo[]>,
       quiet = false,
       max = PAGE,
-      cat: GmailCategory | null = null
+      cat: GmailCategory | null = null,
+      /** First visit to a list this session: show what is saved on this PC while the server is asked. */
+      fromDisk = false
     ) => {
       const req = ++listReq.current
+      // Rows painted from disk stay on screen if the server cannot be reached, like a quiet refresh.
+      let painted: Record<string, MessageSummary[]> | null = null
+      if (fromDisk) {
+        const saved = await savedList(sel, list, boxes, max, cat)
+        if (req !== listReq.current) return
+        if (saved) {
+          painted = saved.byAccount
+          shownKey.current = listKeyOf(sel, list, cat)
+          setMessages(saved.result)
+          setHasMore(saved.more)
+          setListSwitching(false)
+        }
+      }
       if (!quiet) {
         setListLoading(true)
         setListError(null)
         // A page of the same size is a new list; a larger one is "load more" and keeps its rows.
-        if (max === PAGE) setListSwitching(true)
+        if (max === PAGE && !painted) setListSwitching(true)
       }
+      const keepRows = quiet || !!painted
       try {
         let result: MessageSummary[]
         let more = false
@@ -286,8 +354,12 @@ export default function App() {
               more ||= s.value.raw >= max
               return s.value.items
             }
-            errors.push(`${targets[i]!.description}: ${errMsg(s.reason)}`)
-            return []
+            const a = targets[i]!
+            errors.push(`${a.description}: ${errMsg(s.reason)}`)
+            // An account that cannot be reached keeps the rows it has, instead of vanishing from the list.
+            if (!keepRows) return []
+            const inbox = inboxPath(boxes[a.id])
+            return painted?.[a.id] ?? latest.current.messages.filter((m) => m.accountId === a.id && m.mailbox === inbox)
           })
           result.sort((a, b) => b.date.localeCompare(a.date))
         } else {
@@ -303,7 +375,7 @@ export default function App() {
       } catch (e) {
         if (req === listReq.current) {
           // A background check that fails keeps the rows already shown, e.g. while offline.
-          if (!quiet) {
+          if (!keepRows) {
             shownKey.current = null
             setMessages([])
           }
@@ -320,8 +392,8 @@ export default function App() {
   )
 
   // Keep latest values for callbacks that run from timers/events.
-  const latest = useRef({ selection, accounts, mailboxes, limit, category })
-  latest.current = { selection, accounts, mailboxes, limit, category }
+  const latest = useRef({ selection, accounts, mailboxes, limit, category, messages })
+  latest.current = { selection, accounts, mailboxes, limit, category, messages }
 
   /** `only` limits the folder-count reload to accounts that reported a change. */
   const refresh = useCallback(
@@ -398,6 +470,13 @@ export default function App() {
     ;(async () => {
       const [list, s] = await Promise.all([loadAccounts(), api.getSettings()])
       setSettings(s)
+      // Folders and unread counts saved on this PC show before any server answers; a failure here changes nothing.
+      const saved = await Promise.all(
+        list.filter((a) => a.enabled).map(async (a) => [a.id, await api.cachedMailboxes(a.id).catch(() => null)] as const)
+      )
+      const seeded: Record<string, MailboxInfo[]> = {}
+      for (const [id, boxes] of saved) if (boxes) seeded[id] = boxes
+      setMailboxes((m) => ({ ...seeded, ...m }))
       setReady(true)
       await loadMailboxes(list)
     })().catch(showError)
@@ -425,7 +504,7 @@ export default function App() {
     // Until the new list arrives, the rows on screen belong to the old one; leave its cache entry alone.
     shownKey.current = null
     setLimit(PAGE)
-    loadMessages(selection, accounts, mailboxes, false, PAGE, category)
+    loadMessages(selection, accounts, mailboxes, false, PAGE, category, true)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ready, selection, enabledKey, inboxKey, category])
 
@@ -516,6 +595,13 @@ export default function App() {
     let timer: number | undefined
     let changed = new Set<string>()
     const off = api.onMailChanged((e) => {
+      if (e.reset) {
+        // The server renumbered this folder: what was remembered about its messages is about other ones now.
+        forgetFolder(e.accountId, e.path)
+        setSelectedKey((k) => (k && k.startsWith(`${e.accountId}|${e.path}|`) ? null : k))
+        setChecked(new Set())
+        setDetailError(null)
+      }
       changed.add(e.accountId)
       window.clearTimeout(timer)
       timer = window.setTimeout(() => {
@@ -668,9 +754,9 @@ export default function App() {
         if (cached) {
           d = { ...cached, ...selected }
           // getMessage is what marks a message read, so a cached one is marked here instead.
-          if (!selected.seen) void api.setFlags(selected.accountId, selected.mailbox, [selected.uid], { seen: true }).catch(showError)
+          if (!selected.seen) void api.setFlags(selected.accountId, selected.mailbox, [selected.uid], { seen: true }, selected.uidValidity).catch(showError)
         } else {
-          d = await api.getMessage(selected.accountId, selected.mailbox, selected.uid)
+          d = await api.getMessage(selected.accountId, selected.mailbox, selected.uid, selected.uidValidity)
           cacheDetail(d)
         }
         if (req !== detailReq.current) return
@@ -681,7 +767,7 @@ export default function App() {
           patchMessages(new Set(unread.map((m) => m.key)), { seen: true })
           unread.forEach((m) => adjustUnseen(m, -1))
           const others = unread.filter((m) => m.key !== selected.key)
-          for (const g of byFolder(others)) void api.setFlags(g.accountId, g.mailbox, g.uids, { seen: true }).catch(showError)
+          for (const g of byFolder(others)) void api.setFlags(g.accountId, g.mailbox, g.uids, { seen: true }, g.uidValidity).catch(showError)
         }
       } catch (e) {
         if (req === detailReq.current) setDetailError(errMsg(e))
@@ -751,8 +837,8 @@ export default function App() {
       for (const g of byFolder(items)) {
         const res =
           typeof to === 'string'
-            ? await api.move(g.accountId, g.mailbox, g.uids, to)
-            : await api.moveTo(g.accountId, g.mailbox, g.uids, to.path)
+            ? await api.move(g.accountId, g.mailbox, g.uids, to, g.uidValidity)
+            : await api.moveTo(g.accountId, g.mailbox, g.uids, to.path, g.uidValidity)
         if (res && res.uids.length) done.push({ accountId: g.accountId, from: g.mailbox, res })
       }
     } catch (e) {
@@ -768,7 +854,7 @@ export default function App() {
       ? async () => {
           lastUndo.current = null
           try {
-            for (const d of done) await api.moveTo(d.accountId, d.res.path, d.res.uids, d.from)
+            for (const d of done) await api.moveTo(d.accountId, d.res.path, d.res.uids, d.from, d.res.uidValidity)
             toast('Move undone')
           } catch (e) {
             showError(e)
@@ -784,7 +870,7 @@ export default function App() {
     if (!items.length) return
     takeOut(items)
     try {
-      for (const g of byFolder(items)) await api.snooze(g.accountId, g.mailbox, g.uids, at.toISOString())
+      for (const g of byFolder(items)) await api.snooze(g.accountId, g.mailbox, g.uids, at.toISOString(), g.uidValidity)
       lastUndo.current = null
       toast(`${count(items.length)} snoozed until ${formatWhen(at)}`)
     } catch (e) {
@@ -804,7 +890,7 @@ export default function App() {
     patchMessages(new Set(changed.map((m) => m.key)), flags)
     if (flags.seen !== undefined) for (const m of changed) if (m.seen !== flags.seen) adjustUnseen(m, flags.seen ? -1 : 1)
     try {
-      for (const g of byFolder(changed)) await api.setFlags(g.accountId, g.mailbox, g.uids, flags)
+      for (const g of byFolder(changed)) await api.setFlags(g.accountId, g.mailbox, g.uids, flags, g.uidValidity)
     } catch (e) {
       for (const b of before) patchMessage(b.key, { seen: b.seen, flagged: b.flagged })
       showError(e)
@@ -864,7 +950,7 @@ export default function App() {
   const saveAttachment = async (index: number) => {
     if (!selected) return
     try {
-      const path = await api.saveAttachment(selected.accountId, selected.mailbox, selected.uid, index)
+      const path = await api.saveAttachment(selected.accountId, selected.mailbox, selected.uid, index, selected.uidValidity)
       if (path) toast(`Saved to ${path}`)
     } catch (e) {
       showError(e)
@@ -885,7 +971,7 @@ export default function App() {
   const showOriginal = async () => {
     if (!selected) return
     try {
-      const source = await api.getSource(selected.accountId, selected.mailbox, selected.uid)
+      const source = await api.getSource(selected.accountId, selected.mailbox, selected.uid, selected.uidValidity)
       setDialog({ kind: 'source', subject: selected.subject, source })
     } catch (e) {
       showError(e)

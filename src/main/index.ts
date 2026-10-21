@@ -432,7 +432,10 @@ if (!app.requestSingleInstanceLock()) {
     const win = (mainWin = createWindow())
     // Let the first mailbox load finish before scanning mail for contacts.
     setTimeout(() => void contacts.scan(), CONTACTS_SCAN_DELAY_MS)
-    setTimeout(() => mailCache.prune(store.listAccounts().map((a) => a.id)), CONTACTS_SCAN_DELAY_MS)
+    setTimeout(() => {
+      mailCache.prune(store.listAccounts().map((a) => a.id))
+      mailService.trimCache()
+    }, CONTACTS_SCAN_DELAY_MS)
     if (store.recoveredFrom) {
       const backup = store.recoveredFrom
       win.once('ready-to-show', () =>

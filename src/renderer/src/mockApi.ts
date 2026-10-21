@@ -17,7 +17,15 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 const ago = (mins: number) => new Date(Date.now() - mins * 60_000).toISOString()
 
 export function createMockApi(): WinMailApi {
-  const empty = new URLSearchParams(location.search).has('empty')
+  const params = new URLSearchParams(location.search)
+  const empty = params.has('empty')
+  /** `?nocache`: nothing is saved on this PC yet (first launch). `?offline`: the server cannot be reached. */
+  const noCache = params.has('nocache')
+  const offline = params.has('offline')
+  const unreachable = async (ms: number) => {
+    await sleep(ms)
+    if (offline) throw new Error('Server not found. Check the host name.')
+  }
   let settings: Settings = { ...DEFAULT_SETTINGS }
   let aiKey: string | null = null
   let scheduled: (ScheduledInfo & { input: SendInput })[] = []
@@ -234,12 +242,29 @@ export function createMockApi(): WinMailApi {
       return s
     },
     async listMailboxes(id) {
-      await sleep(80)
+      await unreachable(80)
       recount()
       return structuredClone(boxes[id] ?? [])
     },
+    async cachedMailboxes(id) {
+      if (noCache) return null
+      recount()
+      return structuredClone(boxes[id] ?? [])
+    },
+    async cachedList(id, mailbox, limit, view) {
+      if (noCache) return null
+      const all = messages
+        .filter((m) => m.accountId === id && m.mailbox === mailbox)
+        .sort((a, b) => b.date.localeCompare(a.date))
+      const list = (view ? all.filter((m) => m.category === view.replace('category:', '')) : all).slice(0, limit)
+      return { messages: list.map((m) => ({ ...summary(m), uidValidity: '1' })), more: all.length > limit }
+    },
+    async cacheSize() {
+      return 34_000_000
+    },
+    async clearCache() {},
     async listMessages(id, mailbox, limit = 60) {
-      await sleep(120)
+      await unreachable(120)
       return messages
         .filter((m) => m.accountId === id && m.mailbox === mailbox)
         .sort((a, b) => b.date.localeCompare(a.date))
@@ -247,7 +272,7 @@ export function createMockApi(): WinMailApi {
         .map(summary)
     },
     async search(id, mailbox, q, limit = 60) {
-      await sleep(300)
+      await unreachable(300)
       const needle = q.replace(/category:\w+\s*/, '').toLowerCase()
       return messages
         .filter((m) => m.accountId === id && m.mailbox === mailbox)

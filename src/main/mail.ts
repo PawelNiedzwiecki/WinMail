@@ -32,7 +32,7 @@ import type {
 } from '../shared/types'
 import { getProvider } from '../shared/providers'
 import { categorize } from '../shared/categorize'
-import type { MailCache, SnapState } from './cache'
+import type { FolderState, FolderStatus, MailCache, SnapState } from './cache'
 import type { Snoozed, Store } from './store'
 import { decodeCharset, decodeTransfer, htmlToText, makePreview } from './text'
 import { GoogleTokens, REAUTH_MESSAGE, signIn as googleSignIn } from './google'
@@ -126,6 +126,14 @@ const SPECIAL_ORDER: SpecialUse[] = [
   'all',
   'flagged'
 ]
+
+/** A LIST-STATUS answer this young still describes the folder, so a folder it says is unchanged is not opened. */
+const STATUS_FRESH_MS = 10_000
+
+/** More new messages than this in one folder start its saved list again instead of being fetched one by one. */
+const MAX_NEW_MESSAGES = 200
+
+const CATEGORY_QUERY = /^category:\w+$/
 
 const REFUSED_FLAGS = 'The server refused to change the flags.'
 
@@ -234,13 +242,49 @@ function inlineImages(html: string): { html: string; parts: Mail.Attachment[] } 
   return { html: out, parts }
 }
 
+/** UIDs as the shortest list of `a:b` ranges, for commands that name many messages. */
+function packUids(uids: number[]): string {
+  const sorted = [...new Set(uids)].sort((a, b) => a - b)
+  const out: string[] = []
+  for (let i = 0; i < sorted.length; ) {
+    let j = i
+    while (j + 1 < sorted.length && sorted[j + 1] === sorted[j]! + 1) j++
+    out.push(j > i ? `${sorted[i]}:${sorted[j]}` : String(sorted[i]))
+    i = j + 1
+  }
+  return out.join(',')
+}
+
+/** The UIDs in a list made by `packUids` or joined with commas; null for anything else (e.g. `5:*`) or a huge range. */
+function unpackUids(list: string): Set<number> | null {
+  if (!/^[\d,:]+$/.test(list)) return null
+  const out = new Set<number>()
+  for (const part of list.split(',')) {
+    const [from, to = from] = part.split(':').map(Number)
+    if (from === undefined || to === undefined || to < from || to - from > 100_000) return null
+    for (let u = from; u <= to; u++) out.add(u)
+  }
+  return out
+}
+
+/** Folder state worth keeping from a LIST-STATUS answer; null when the server did not give all of it. */
+function folderStatus(s: { messages?: number; uidNext?: number; uidValidity?: bigint; highestModseq?: bigint } | false | undefined): FolderStatus | null {
+  if (!s || typeof s.messages !== 'number' || typeof s.uidNext !== 'number' || typeof s.uidValidity !== 'bigint') return null
+  return {
+    uidValidity: String(s.uidValidity),
+    uidNext: s.uidNext,
+    messages: s.messages,
+    highestModseq: typeof s.highestModseq === 'bigint' ? String(s.highestModseq) : undefined
+  }
+}
+
 /**
  * A fetch also returns rows the server volunteered (a flag change on some other message, sometimes without a UID),
  * and may split one message over several rows. Merges those and keeps only messages that were asked for, with
  * their envelope, so nothing half-empty is ever saved. `uids` is the UID list that was requested, if it was one.
  */
 function onlyAsked<T extends { uid?: number; envelope?: unknown }>(rows: T[], uids: string | null): T[] {
-  const asked = uids && /^[\d,]+$/.test(uids) ? new Set(uids.split(',').map(Number)) : null
+  const asked = uids ? unpackUids(uids) : null
   const byUid = new Map<number, T>()
   for (const r of rows) {
     if (r.uid === undefined || (asked && !asked.has(r.uid))) continue
@@ -273,8 +317,14 @@ export class MailService {
   private previews = new Map<string, string>()
   private specialPaths = new Map<string, Partial<Record<SpecialUse, string>>>()
   private inboxTimers = new Map<string, NodeJS.Timeout>()
-  /** Highest UID listed per account|path|uidValidity, to count what's new on the next check. */
-  private newestUid = new Map<string, number>()
+  /** Folders (account|path|uidValidity) synced since the app started; only those report "Downloading N new messages". */
+  private syncedThisSession = new Set<string>()
+  /** Folders (account|path) being synced right now; the cache is not trimmed under them. */
+  private syncing = new Set<string>()
+  /** Opened messages saved since the cache was last trimmed. */
+  private bodiesSaved = 0
+  /** What the last LIST-STATUS said about each folder (account|path), and when. Dropped when this app changes the folder. */
+  private statuses = new Map<string, { at: number; status: FolderStatus }>()
   /** Raw source of the last opened message, so saving an attachment doesn't download it again. */
   private lastSource: { key: string; source: Buffer } | null = null
   /** Highest inbox UID already announced per account|uidValidity, for new-mail notifications. */
@@ -282,6 +332,8 @@ export class MailService {
   private uploads = new Map<string, Upload>()
   /** Old draft versions that could not be removed yet, retried with the account's next draft change. */
   private staleDrafts = new Map<string, Set<number>>()
+  /** UIDVALIDITY each draft UID handed out was valid under, so a renumbered Drafts folder cannot get the wrong one deleted. */
+  private draftValidity = new Map<string, string>()
   private tokens = new GoogleTokens()
 
   constructor(
@@ -406,15 +458,29 @@ export class MailService {
     return c
   }
 
-  private async withMailbox<T>(accountId: string, path: string, fn: (c: ImapFlow) => Promise<T>) {
+  /**
+   * Runs `fn` with the folder selected. `uidValidity` is what the caller knew the folder's UIDs under: when the
+   * server has renumbered it since, the UIDs the caller holds are about other messages, so nothing is done.
+   */
+  private async withMailbox<T>(accountId: string, path: string, fn: (c: ImapFlow) => Promise<T>, uidValidity?: string) {
     const c = await this.client(accountId)
     const lock = await c.getMailboxLock(path)
     try {
+      if (uidValidity !== undefined) this.checkValidity(accountId, path, c, uidValidity)
       return await fn(c)
     } finally {
       lock.release()
       this.scheduleInboxReturn(accountId, c, path)
     }
+  }
+
+  private checkValidity(accountId: string, path: string, c: ImapFlow, known: string): void {
+    const live = String(c.mailbox && c.mailbox.uidValidity)
+    if (live === known) return
+    const saved = this.cache.state(accountId, path)?.uidValidity
+    if (saved && saved !== live) this.cache.wipeFolder(accountId, path)
+    this.emit({ accountId, path, reset: true })
+    throw new Error('This folder changed on the server. It has been reloaded; try again.')
   }
 
   /**
@@ -512,7 +578,7 @@ export class MailService {
 
   async listMailboxes(accountId: string): Promise<MailboxInfo[]> {
     const c = await this.client(accountId)
-    const list = await c.list({ statusQuery: { unseen: true } })
+    const list = await c.list({ statusQuery: { unseen: true, messages: true, uidNext: true, uidValidity: true, highestModseq: true } })
     const selectable = list.filter((l) => l.listed !== false && !l.flags.has('\\Noselect'))
     const paths = new Set(selectable.map((l) => l.path))
 
@@ -527,7 +593,14 @@ export class MailService {
       return d
     }
 
+    const states = new Map<string, FolderStatus>()
+    const now = Date.now()
     const out = selectable.map((l): MailboxInfo => {
+      const status = folderStatus(l.status)
+      if (status) {
+        states.set(l.path, status)
+        this.statuses.set(`${accountId}|${l.path}`, { at: now, status })
+      } else this.statuses.delete(`${accountId}|${l.path}`)
       const use =
         l.path.toUpperCase() === 'INBOX'
           ? 'inbox'
@@ -547,7 +620,7 @@ export class MailService {
 
     const rank = (m: MailboxInfo) => (m.specialUse ? SPECIAL_ORDER.indexOf(m.specialUse) : 99)
     const sorted = out.sort((a, b) => rank(a) - rank(b) || a.path.localeCompare(b.path))
-    this.cache.saveMailboxes(accountId, sorted, new Map())
+    this.cache.saveMailboxes(accountId, sorted, states)
     return sorted
   }
 
@@ -562,7 +635,13 @@ export class MailService {
     return this.specialPaths.get(accountId)?.inbox ?? 'INBOX'
   }
 
+  /**
+   * The newest `limit` messages of a folder. Mail already saved on this PC is not downloaded again: the server is
+   * asked which of its messages are new, which are gone and which flags changed.
+   */
   async listMessages(accountId: string, path: string, limit = 60): Promise<MessageSummary[]> {
+    const unchanged = this.unchanged(accountId, path, limit)
+    if (unchanged) return unchanged
     const { list, fresh } = await this.withMailbox(accountId, path, async (c) => {
       const mb = c.mailbox
       if (!mb) return { list: [], fresh: [] }
@@ -575,33 +654,167 @@ export class MailService {
         modseq: c.enabled.has('CONDSTORE') && !mb.noModseq && mb.highestModseq !== undefined ? String(mb.highestModseq) : null
       }
       this.cache.ensureFolder(accountId, path)
-      const gen = this.cache.state(accountId, path)?.gen ?? -1
-      if (!mb.exists) {
-        this.cache.replaceWindow(accountId, path, gen, [], snap)
-        return { list: [], fresh: [] }
-      }
-
-      // Count arrivals since the last listing so the UI can say "Downloading 3 new messages".
-      const box = `${accountId}|${path}|${mb.uidValidity}`
-      const last = this.newestUid.get(box)
-      let incoming = 0
-      if (last !== undefined && mb.uidNext > last + 1) {
-        const uids = await c.search({ uid: `${last + 1}:*` }, { uid: true })
-        incoming = uids ? uids.filter((u) => u > last).length : 0
-      }
-      if (incoming) this.progress({ accountId, path, incoming })
+      const st = this.cache.state(accountId, path)
+      // The UIDs were renumbered since last time: what the window showed is about other messages now.
+      if (st?.uidValidity && st.uidValidity !== snap.uidValidity) this.emit({ accountId, path, reset: true })
+      const box = `${accountId}|${path}|${snap.uidValidity}`
+      const busy = `${accountId}|${path}`
+      this.syncing.add(busy)
+      let list: MessageSummary[]
       try {
-        const list = await this.fetchSummaries(c, accountId, path, `${Math.max(1, mb.exists - limit + 1)}:*`, false)
-        this.newestUid.set(box, list.reduce((max, m) => Math.max(max, m.uid), last ?? 0))
-        this.cache.replaceWindow(accountId, path, gen, list, snap)
-        const fresh = path === this.inboxOf(accountId) ? await this.unannounced(c, accountId) : []
-        return { list, fresh }
+        if (!mb.exists) {
+          this.cache.replaceWindow(accountId, path, st?.gen ?? -1, [], snap)
+          list = []
+        } else {
+          list = await this.syncFolder(c, accountId, path, limit, snap, st, box)
+        }
       } finally {
-        if (incoming) this.progress({ accountId, path, incoming: 0 })
+        this.syncing.delete(busy)
       }
+      this.syncedThisSession.add(box)
+      const fresh = mb.exists && path === this.inboxOf(accountId) ? await this.unannounced(c, accountId) : []
+      return { list, fresh }
     })
     if (fresh.length) this.arrived(accountId, fresh)
     return list
+  }
+
+  /** Keeps the saved copy from growing without end; see `MailCache.trim`. */
+  trimCache(): void {
+    this.cache.trim(this.syncing)
+  }
+
+  /**
+   * A folder whose saved list is still right needs no connection at all: the last LIST-STATUS (seconds old) says
+   * nothing was added, removed or flagged since the saved list was made. Only for servers with CONDSTORE, and not
+   * for the inbox, which is selected anyway for IDLE and for new-mail notifications.
+   */
+  private unchanged(accountId: string, path: string, limit: number): MessageSummary[] | null {
+    if (path === this.inboxOf(accountId)) return null
+    const s = this.statuses.get(`${accountId}|${path}`)
+    if (!s || Date.now() - s.at > STATUS_FRESH_MS || s.status.highestModseq === undefined) return null
+    const st = this.cache.state(accountId, path)
+    if (!st || st.floor === null || st.modseq === null) return null
+    if (st.uidValidity !== s.status.uidValidity || st.uidNext !== s.status.uidNext || st.messages !== s.status.messages) return null
+    if (BigInt(s.status.highestModseq) > BigInt(st.modseq)) return null
+    if (st.count < Math.min(limit, s.status.messages)) return null
+    return this.cache.window(accountId, path, limit)?.messages ?? null
+  }
+
+  /** Brings the saved list of a folder up to date and returns its newest `limit` messages. */
+  private async syncFolder(
+    c: ImapFlow,
+    accountId: string,
+    path: string,
+    limit: number,
+    snap: SnapState,
+    st: FolderState | null,
+    box: string
+  ): Promise<MessageSummary[]> {
+    const gen = st?.gen ?? -1
+    // First visit, a renumbered folder, or too much new mail to be worth sorting through: start the window again.
+    const fullWindow = async () => {
+      const exists = c.mailbox ? c.mailbox.exists : snap.messages
+      const list = await this.fetchSummaries(c, accountId, path, `${Math.max(1, exists - limit + 1)}:*`, false)
+      this.cache.replaceWindow(accountId, path, gen, list, snap)
+      return list
+    }
+    if (!st || st.floor === null || st.uidValidity !== snap.uidValidity) return fullWindow()
+    const floor = st.floor
+
+    // Which of the server's messages in the saved range are new, and which saved ones are gone.
+    const found = await c.search({ uid: `${floor}:*` }, { uid: true })
+    // False means the server refused, which says nothing about what is in the folder; never read it as "empty".
+    if (!Array.isArray(found)) throw new Error('The server could not list this folder. Try again.')
+    const server = found.filter((u) => u >= floor) // "N:*" also returns the last message when N is past the end
+    const saved = this.cache.uids(accountId, path, floor)
+    const there = new Set(server)
+    const have = new Set(saved)
+    const remove = saved.filter((u) => !there.has(u))
+    const missing = server.filter((u) => !have.has(u))
+    if (missing.length > Math.max(limit, MAX_NEW_MESSAGES)) return fullWindow()
+
+    const incoming = this.syncedThisSession.has(box) ? missing.filter((u) => u >= (st.uidNext ?? 0)).length : 0
+    if (incoming) this.progress({ accountId, path, incoming })
+    try {
+      const upsert = missing.length ? await this.fetchSummaries(c, accountId, path, packUids(missing), true) : []
+
+      // "Load more": the saved range is shorter than asked for and the server has older mail.
+      let newFloor = floor
+      const exists = c.mailbox ? c.mailbox.exists : 0
+      if (server.length < limit && exists > server.length) {
+        // One row of overlap proves the answer reaches the saved range; a gap from a shifted numbering is
+        // found and filled by the next sync, whose list of UIDs covers everything from the new floor up.
+        const end = Math.min(exists, exists - server.length + 1)
+        const older = await this.fetchSummaries(c, accountId, path, `${Math.max(1, exists - limit + 1)}:${end}`, false)
+        const below = older.filter((m) => m.uid < floor)
+        // Only if the answer reaches the saved range is nothing missing in between.
+        if (below.length && older.some((m) => m.uid >= floor)) {
+          upsert.push(...below)
+          newFloor = Math.min(...below.map((m) => m.uid))
+        }
+      }
+
+      const { flags, modseq } = await this.readFlags(c, newFloor, st, snap)
+      const ok = this.cache.applySync(accountId, path, gen, {
+        upsert,
+        remove,
+        flags,
+        floor: newFloor,
+        snap: { ...snap, modseq }
+      })
+      const saved2 = ok ? this.cache.window(accountId, path, limit) : null
+      return saved2 ? saved2.messages : this.merged(accountId, path, limit, upsert, remove, flags)
+    } finally {
+      if (incoming) this.progress({ accountId, path, incoming: 0 })
+    }
+  }
+
+  /**
+   * Current flags of the saved range, and the CHANGEDSINCE checkpoint to store. With CONDSTORE only messages that
+   * changed since the last checkpoint come back. The checkpoint is never read from the connection after the fetch:
+   * it is the state at the start (before anything was fetched), or a modseq that really came back.
+   */
+  private async readFlags(
+    c: ImapFlow,
+    floor: number,
+    st: FolderState,
+    snap: SnapState
+  ): Promise<{ flags: { uid: number; seen: boolean; flagged: boolean }[]; modseq: string | null }> {
+    const range = `${floor}:*`
+    const usable = (rows: { uid?: number; flags?: Set<string> }[]) =>
+      rows.filter((r): r is { uid: number; flags: Set<string> } => r.uid !== undefined && r.uid >= floor && !!r.flags)
+    const toFlags = (rows: { uid: number; flags: Set<string> }[]) =>
+      rows.map((r) => ({ uid: r.uid, seen: r.flags.has('\\Seen'), flagged: r.flags.has('\\Flagged') }))
+    if (snap.modseq !== null && st.modseq !== null) {
+      const rows = await c.fetchAll(range, { uid: true, flags: true }, { uid: true, changedSince: BigInt(st.modseq) })
+      const good = usable(rows)
+      let next = BigInt(st.modseq) > BigInt(snap.modseq) ? BigInt(st.modseq) : BigInt(snap.modseq)
+      for (const r of rows) if (r.uid !== undefined && r.uid >= floor && r.modseq !== undefined && r.modseq > next) next = r.modseq
+      // A row without a UID cannot be applied; keep the old checkpoint so that change comes again.
+      return { flags: toFlags(good), modseq: rows.some((r) => r.uid === undefined) ? st.modseq : String(next) }
+    }
+    const rows = await c.fetchAll(range, { uid: true, flags: true }, { uid: true })
+    return { flags: toFlags(usable(rows)), modseq: snap.modseq }
+  }
+
+  /** The saved list with a sync applied in memory, for when it could not be written. */
+  private merged(
+    accountId: string,
+    path: string,
+    limit: number,
+    upsert: MessageSummary[],
+    remove: number[],
+    flags: { uid: number; seen: boolean; flagged: boolean }[]
+  ): MessageSummary[] {
+    const rows = new Map((this.cache.window(accountId, path, 100_000)?.messages ?? []).map((m) => [m.uid, m]))
+    for (const u of remove) rows.delete(u)
+    for (const m of upsert) rows.set(m.uid, m)
+    for (const f of flags) {
+      const m = rows.get(f.uid)
+      if (m) rows.set(f.uid, { ...m, seen: f.seen, flagged: f.flagged })
+    }
+    return [...rows.values()].sort((a, b) => b.date.localeCompare(a.date)).slice(0, limit)
   }
 
   /**
@@ -642,7 +855,10 @@ export class MailService {
       const uids = (await c.search(q, { uid: true })) || []
       if (!uids.length) return []
       const newest = uids.sort((a, b) => b - a).slice(0, limit)
-      return this.fetchSummaries(c, accountId, path, newest.join(','), true)
+      const found = await this.fetchSummaries(c, accountId, path, newest.join(','), true)
+      // A Gmail category tab is painted from the last result next time.
+      if (gmail && CATEGORY_QUERY.test(query)) this.cache.saveView(accountId, path, query, found, String(c.mailbox && c.mailbox.uidValidity))
+      return found
     })
   }
 
@@ -684,6 +900,10 @@ export class MailService {
     )
 
     const cacheKey = (uid: number) => `${accountId}|${path}|${mb.uidValidity}|${uid}`
+
+    // Previews of messages saved on this PC are not downloaded again.
+    const saved = this.cache.previews(accountId, path, rows.filter((r) => !this.previews.has(cacheKey(r.uid))).map((r) => r.uid), String(mb.uidValidity))
+    for (const [uid, preview] of saved) this.previews.set(cacheKey(uid), preview)
 
     // Fetch the first ~3 KB of the text part for previews, grouped by part id.
     const groups = new Map<string, number[]>()
@@ -740,6 +960,7 @@ export class MailService {
           messageId: env?.messageId || undefined,
           parents: [...new Set([...refs, ...messageIds(env?.inReplyTo)])],
           threadId: r.threadId,
+          uidValidity: String(mb.uidValidity),
           category: categorize({
             email: from.email,
             subject,
@@ -753,7 +974,18 @@ export class MailService {
       .sort((a, b) => b.date.localeCompare(a.date))
   }
 
-  async getMessage(accountId: string, path: string, uid: number): Promise<MessageDetail> {
+  async getMessage(accountId: string, path: string, uid: number, uidValidity?: string): Promise<MessageDetail> {
+    // Opened before: no connection needed, so it works offline. A message that was unread when it was saved is
+    // marked read on the server in the background.
+    const saved = this.cache.body(accountId, path, uid)
+    if (saved && (uidValidity === undefined || saved.uidValidity === uidValidity)) {
+      if (!saved.wasSeen) {
+        this.setFlags(accountId, path, [uid], { seen: true }, saved.uidValidity).catch((err) =>
+          console.error('[imap] could not mark as read:', err instanceof Error ? err.message : err)
+        )
+      }
+      return saved.detail
+    }
     return this.withMailbox(accountId, path, async (c) => {
       const m = await c.fetchOne(
         String(uid),
@@ -790,6 +1022,7 @@ export class MailService {
         parents: [...new Set([...refs, ...messageIds(p.inReplyTo)])],
         threadId: m.threadId,
         unsubscribe: parseUnsubscribe(p.headerLines),
+        uidValidity: String(c.mailbox && c.mailbox.uidValidity),
         attachments: p.attachments
           .map((a, index) => ({ a, index }))
           .filter(({ a }) => !a.related)
@@ -800,64 +1033,90 @@ export class MailService {
             size: a.size
           }))
       }
-      this.cache.saveBody(accountId, path, uid, detail, String(c.mailbox && c.mailbox.uidValidity))
+      if (this.cache.saveBody(accountId, path, uid, detail, String(c.mailbox && c.mailbox.uidValidity)) && ++this.bodiesSaved % 50 === 0) {
+        this.trimCache()
+      }
       return detail
     })
   }
 
-  async getSource(accountId: string, path: string, uid: number): Promise<string> {
-    return this.withMailbox(accountId, path, async (c) => {
-      const m = await c.fetchOne(String(uid), { uid: true, source: true }, { uid: true })
-      if (!m || !m.source) throw new Error('Message not found. It may have been moved.')
-      return m.source.toString('utf8')
-    })
+  async getSource(accountId: string, path: string, uid: number, uidValidity?: string): Promise<string> {
+    return this.withMailbox(
+      accountId,
+      path,
+      async (c) => {
+        const m = await c.fetchOne(String(uid), { uid: true, source: true }, { uid: true })
+        if (!m || !m.source) throw new Error('Message not found. It may have been moved.')
+        return m.source.toString('utf8')
+      },
+      uidValidity
+    )
   }
 
-  async getAttachment(accountId: string, path: string, uid: number, index: number) {
-    return this.withMailbox(accountId, path, async (c) => {
-      const key = `${accountId}|${path}|${c.mailbox && c.mailbox.uidValidity}|${uid}`
-      let source = this.lastSource?.key === key ? this.lastSource.source : undefined
-      if (!source) {
-        const m = await c.fetchOne(String(uid), { uid: true, source: true }, { uid: true })
-        if (!m || !m.source) throw new Error('Message not found.')
-        source = m.source
-      }
-      const p = await simpleParser(source)
-      const a = p.attachments[index]
-      if (!a) throw new Error('Attachment not found.')
-      return { filename: a.filename || 'attachment', content: a.content }
-    })
+  async getAttachment(accountId: string, path: string, uid: number, index: number, uidValidity?: string) {
+    return this.withMailbox(
+      accountId,
+      path,
+      async (c) => {
+        const key = `${accountId}|${path}|${c.mailbox && c.mailbox.uidValidity}|${uid}`
+        let source = this.lastSource?.key === key ? this.lastSource.source : undefined
+        if (!source) {
+          const m = await c.fetchOne(String(uid), { uid: true, source: true }, { uid: true })
+          if (!m || !m.source) throw new Error('Message not found.')
+          source = m.source
+        }
+        const p = await simpleParser(source)
+        const a = p.attachments[index]
+        if (!a) throw new Error('Attachment not found.')
+        return { filename: a.filename || 'attachment', content: a.content }
+      },
+      uidValidity
+    )
   }
 
   async setFlags(
     accountId: string,
     path: string,
     uids: number[],
-    flags: { seen?: boolean; flagged?: boolean }
+    flags: { seen?: boolean; flagged?: boolean },
+    uidValidity?: string
   ): Promise<void> {
-    await this.withMailbox(accountId, path, async (c) => {
-      const add: string[] = []
-      const remove: string[] = []
-      if (flags.seen !== undefined) (flags.seen ? add : remove).push('\\Seen')
-      if (flags.flagged !== undefined) (flags.flagged ? add : remove).push('\\Flagged')
-      const range = uids.join(',')
-      // imapflow answers false, rather than throwing, when the server says no.
-      if (add.length && !(await c.messageFlagsAdd(range, add, { uid: true }))) throw new Error(REFUSED_FLAGS)
-      if (remove.length && !(await c.messageFlagsRemove(range, remove, { uid: true }))) throw new Error(REFUSED_FLAGS)
-      this.cache.setFlags(accountId, path, uids, flags)
-    })
+    await this.withMailbox(
+      accountId,
+      path,
+      async (c) => {
+        const add: string[] = []
+        const remove: string[] = []
+        if (flags.seen !== undefined) (flags.seen ? add : remove).push('\\Seen')
+        if (flags.flagged !== undefined) (flags.flagged ? add : remove).push('\\Flagged')
+        const range = uids.join(',')
+        // imapflow answers false, rather than throwing, when the server says no.
+        if (add.length && !(await c.messageFlagsAdd(range, add, { uid: true }))) throw new Error(REFUSED_FLAGS)
+        if (remove.length && !(await c.messageFlagsRemove(range, remove, { uid: true }))) throw new Error(REFUSED_FLAGS)
+        this.cache.setFlags(accountId, path, uids, flags)
+        this.statuses.delete(`${accountId}|${path}`)
+      },
+      uidValidity
+    )
   }
 
   async markAllRead(accountId: string, path: string): Promise<void> {
     await this.withMailbox(accountId, path, async (c) => {
       if (!c.mailbox || !c.mailbox.exists) return
       // False can also mean nothing was unread; either way the next sync reads the flags again.
+      this.statuses.delete(`${accountId}|${path}`)
       if (await c.messageFlagsAdd({ seen: false }, ['\\Seen'])) this.cache.markAllRead(accountId, path)
       else this.cache.clearCheckpoint(accountId, path)
     })
   }
 
-  async move(accountId: string, path: string, uids: number[], target: MoveTarget): Promise<MoveResult | null> {
+  async move(
+    accountId: string,
+    path: string,
+    uids: number[],
+    target: MoveTarget,
+    uidValidity?: string
+  ): Promise<MoveResult | null> {
     let dest = target === 'inbox' ? this.inboxOf(accountId) : await this.specialPath(accountId, target)
     // Gmail has no Archive folder; archiving there means "All Mail".
     if (!dest && target === 'archive') dest = await this.specialPath(accountId, 'all')
@@ -865,42 +1124,61 @@ export class MailService {
 
     if (dest === path) {
       if (target === 'trash') {
-        await this.withMailbox(accountId, path, async (c) => {
-          if (!(await c.messageDelete(uids.join(','), { uid: true }))) throw new Error('The server refused to delete the message.')
-          this.cache.remove(accountId, path, uids)
-        })
+        await this.withMailbox(
+          accountId,
+          path,
+          async (c) => {
+            if (!(await c.messageDelete(uids.join(','), { uid: true }))) throw new Error('The server refused to delete the message.')
+            this.cache.remove(accountId, path, uids)
+            this.statuses.delete(`${accountId}|${path}`)
+          },
+          uidValidity
+        )
       }
       return null
     }
-    return this.moveTo(accountId, path, uids, dest)
+    return this.moveTo(accountId, path, uids, dest, uidValidity)
   }
 
-  async moveTo(accountId: string, path: string, uids: number[], dest: string): Promise<MoveResult | null> {
+  async moveTo(accountId: string, path: string, uids: number[], dest: string, uidValidity?: string): Promise<MoveResult | null> {
     if (dest === path) return null
-    return this.withMailbox(accountId, path, async (c) => {
-      const res = await c.messageMove(uids.join(','), dest, { uid: true })
-      if (!res) throw new Error('The server refused to move the message.')
-      const moved = uids.map((u) => res.uidMap?.get(u)).filter((u): u is number => u !== undefined)
-      this.cache.moved(accountId, path, uids, res.destination, res.uidMap, res.uidValidity === undefined ? undefined : String(res.uidValidity))
-      return moved.length === uids.length ? { path: res.destination, uids: moved } : null
-    })
+    return this.withMailbox(
+      accountId,
+      path,
+      async (c) => {
+        const res = await c.messageMove(uids.join(','), dest, { uid: true })
+        if (!res) throw new Error('The server refused to move the message.')
+        const moved = uids.map((u) => res.uidMap?.get(u)).filter((u): u is number => u !== undefined)
+        const destValidity = res.uidValidity === undefined ? undefined : String(res.uidValidity)
+        this.cache.moved(accountId, path, uids, res.destination, res.uidMap, destValidity)
+        this.statuses.delete(`${accountId}|${path}`)
+        this.statuses.delete(`${accountId}|${res.destination}`)
+        return moved.length === uids.length ? { path: res.destination, uids: moved, uidValidity: destValidity } : null
+      },
+      uidValidity
+    )
   }
 
   // ---------- Snooze ----------
 
-  async snooze(accountId: string, path: string, uids: number[], until: string): Promise<void> {
+  async snooze(accountId: string, path: string, uids: number[], until: string, uidValidity?: string): Promise<void> {
     let folder = await this.specialPath(accountId, 'snoozed')
     if (!folder) {
       const c = await this.client(accountId)
       folder = (await c.mailboxCreate(SNOOZE_FOLDER)).path
       await this.listMailboxes(accountId)
     }
-    const ids = await this.withMailbox(accountId, path, async (c) => {
-      const rows = await c.fetchAll(uids.join(','), { uid: true, envelope: true }, { uid: true })
-      return rows.map((r) => r.envelope?.messageId).filter((id): id is string => !!id)
-    })
+    const ids = await this.withMailbox(
+      accountId,
+      path,
+      async (c) => {
+        const rows = await c.fetchAll(uids.join(','), { uid: true, envelope: true }, { uid: true })
+        return rows.map((r) => r.envelope?.messageId).filter((id): id is string => !!id)
+      },
+      uidValidity
+    )
     if (ids.length < uids.length) throw new Error('Messages without a Message-ID cannot be snoozed.')
-    await this.moveTo(accountId, path, uids, folder)
+    await this.moveTo(accountId, path, uids, folder, uidValidity)
     this.store.setSnoozed([
       ...this.store.listSnoozed(),
       ...ids.map((messageId) => ({ accountId, messageId, until }))
@@ -928,7 +1206,10 @@ export class MailService {
             const uids = (await c.search({ header: { 'message-id': s.messageId } }, { uid: true })) || []
             if (uids.length) {
               await c.messageFlagsRemove(uids.join(','), ['\\Seen'], { uid: true })
-              if (await c.messageMove(uids.join(','), inbox, { uid: true })) this.cache.remove(accountId, folder, uids)
+              if (await c.messageMove(uids.join(','), inbox, { uid: true })) {
+                this.cache.remove(accountId, folder, uids)
+                this.statuses.delete(`${accountId}|${folder}`)
+              }
             }
             done.add(s)
           }
@@ -1012,6 +1293,7 @@ export class MailService {
       if (sent) {
         try {
           const copy = input.bcc ? await compile(mail, true) : raw
+          this.statuses.delete(`${acc.id}|${sent}`)
           await this.withUpload(acc.id, (c) => c.append(sent, copy, ['\\Seen']))
         } catch (err) {
           console.error('Could not save to Sent:', err)
@@ -1033,9 +1315,13 @@ export class MailService {
     }
     const mail = this.mailOptions(acc, input)
     const raw = await compile(mail, true)
+    this.statuses.delete(`${acc.id}|${drafts}`)
     const uid = await this.withUpload(acc.id, async (c) => {
       const res = await c.append(drafts, raw, ['\\Draft', '\\Seen'])
-      if (res && res.uid) return res.uid
+      if (res && res.uid) {
+        if (res.uidValidity) this.draftValidity.set(`${acc.id}|${res.uid}`, String(res.uidValidity))
+        return res.uid
+      }
       // Without UIDPLUS the server doesn't say; find the copy by the Message-ID it was just given.
       // The message is stored by now, so a failed lookup must not fail the save (a retry would add a copy).
       try {
@@ -1084,19 +1370,26 @@ export class MailService {
         let inTrash: number[] = []
         const lock = await c.getMailboxLock(drafts)
         try {
+          // A UID remembered from before the folder was renumbered now belongs to another message.
+          const live = String(c.mailbox && c.mailbox.uidValidity)
+          const ids = all.filter((u) => {
+            const was = this.draftValidity.get(`${accountId}|${u}`)
+            return was === undefined || was === live
+          })
+          if (!ids.length) return
           if (trash) {
-            const res = await c.messageMove(all.join(','), trash, { uid: true })
+            const res = await c.messageMove(ids.join(','), trash, { uid: true })
             if (!res) throw new Error('The server refused to remove the old draft.')
-            inTrash = all.map((u) => res.uidMap?.get(u)).filter((u): u is number => u !== undefined)
+            inTrash = ids.map((u) => res.uidMap?.get(u)).filter((u): u is number => u !== undefined)
           } else if (c.capabilities.has('UIDPLUS')) {
-            if (!(await c.messageDelete(all.join(','), { uid: true }))) {
+            if (!(await c.messageDelete(ids.join(','), { uid: true }))) {
               throw new Error('The server refused to remove the old draft.')
             }
           } else {
             // Plain EXPUNGE would also remove messages other apps flagged but kept; expunge only when all flagged are ours.
-            await c.messageFlagsAdd(all.join(','), ['\\Deleted'], { uid: true })
+            await c.messageFlagsAdd(ids.join(','), ['\\Deleted'], { uid: true })
             const flagged = (await c.search({ deleted: true }, { uid: true })) || []
-            if (flagged.every((u) => all.includes(u))) await c.messageDelete(all.join(','), { uid: true })
+            if (flagged.every((u) => ids.includes(u))) await c.messageDelete(ids.join(','), { uid: true })
           }
         } finally {
           // One lock at a time per connection: Trash is locked only after Drafts is released.
@@ -1112,6 +1405,8 @@ export class MailService {
         }
       })
       this.cache.remove(accountId, drafts, all)
+      this.statuses.delete(`${accountId}|${drafts}`)
+      for (const u of all) this.draftValidity.delete(`${accountId}|${u}`)
       this.staleDrafts.delete(accountId)
     } catch (err) {
       this.staleDrafts.set(accountId, new Set(all))
@@ -1121,12 +1416,17 @@ export class MailService {
   }
 
   /** A saved message as Compose input; attachments go to temporary files. */
-  async openDraft(accountId: string, path: string, uid: number): Promise<SendInput> {
-    const source = await this.withMailbox(accountId, path, async (c) => {
-      const m = await c.fetchOne(String(uid), { uid: true, source: true }, { uid: true })
-      if (!m || !m.source) throw new Error('Message not found. It may have been moved.')
-      return m.source
-    })
+  async openDraft(accountId: string, path: string, uid: number, uidValidity?: string): Promise<SendInput> {
+    const { source, validity } = await this.withMailbox(
+      accountId,
+      path,
+      async (c) => {
+        const m = await c.fetchOne(String(uid), { uid: true, source: true }, { uid: true })
+        if (!m || !m.source) throw new Error('Message not found. It may have been moved.')
+        return { source: m.source, validity: String(c.mailbox && c.mailbox.uidValidity) }
+      },
+      uidValidity
+    )
     const p = await simpleParser(source)
     const dir = join(TEMP_ROOT, randomUUID())
     const attachments: OutgoingAttachment[] = []
@@ -1140,6 +1440,7 @@ export class MailService {
     }
     const refs = p.references ? (Array.isArray(p.references) ? p.references : [p.references]) : []
     const isDraft = path === (await this.specialPath(accountId, 'drafts'))
+    if (isDraft) this.draftValidity.set(`${accountId}|${uid}`, validity)
     return {
       accountId,
       to: formatAddresses(parsedAddresses(p.to)),

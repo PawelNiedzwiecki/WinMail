@@ -319,7 +319,7 @@ function ThreadItem({ m, allowRemote, dark, appDark }: { m: MessageSummary; allo
     if (!open || detail) return
     let live = true
     api
-      .getMessage(m.accountId, m.mailbox, m.uid)
+      .getMessage(m.accountId, m.mailbox, m.uid, m.uidValidity)
       .then((d) => live && setDetail(d))
       .catch((e) => live && setError(e instanceof Error ? e.message : String(e)))
     return () => {

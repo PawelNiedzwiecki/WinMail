@@ -21,6 +21,7 @@ import { Backdrop, panelExit, useModalEscape } from './Backdrop'
 import type { Account, Appearance, ComposeFormat, ContactsStatus, ListDensity, MessageAppearance, Settings } from '@shared/types'
 import { getProvider } from '@shared/providers'
 import { api } from '../api'
+import { formatSize } from '../format'
 import { Row, ServerFields } from './forms'
 import { ProviderLogo } from './ProviderLogo'
 import { Select } from './Select'
@@ -163,7 +164,42 @@ function GeneralPage({ settings, onChange }: PageProps) {
           />
         </Item>
       </Group>
+
+      <StorageGroup />
     </>
+  )
+}
+
+/** The copy of your mail kept on this PC so folders and opened messages show at once and work offline. */
+function StorageGroup() {
+  const [size, setSize] = useState<number | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  useEffect(() => {
+    api.cacheSize().then(setSize, () => setSize(null))
+  }, [])
+  const clear = async () => {
+    setError(null)
+    try {
+      await api.clearCache()
+      setSize(await api.cacheSize())
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    }
+  }
+  return (
+    <Group title="Storage">
+      <Item
+        title={size === null ? 'Mail saved on this PC' : `Mail saved on this PC: ${formatSize(size)}`}
+        description={
+          error ??
+          'Folders you have opened and the messages you have read, so they show at once and can be read offline. It is not encrypted; Windows account protection applies, as for your contacts. Clearing it only means everything is downloaded again as you use it.'
+        }
+      >
+        <button className="btn" onClick={() => void clear()}>
+          Clear
+        </button>
+      </Item>
+    </Group>
   )
 }
 

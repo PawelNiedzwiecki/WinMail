@@ -18,7 +18,8 @@ src/
   main/        Electron main process
     index.ts       Window creation, single instance, wiring, notifications, timers
     store.ts       winmail.json: accounts, settings, encrypted secrets
-    mail.ts        MailService: IMAP connections, mailboxes, messages, search, move, send, drafts
+    mail.ts        MailService: IMAP connections, mailboxes, messages, search, move, send, drafts, folder sync
+    cache.ts       MailCache: SQLite copy of folder lists and opened messages (mail-cache.db)
     google.ts      Google OAuth (PKCE, loopback), access-token cache, revoke
     contacts.ts    Contact ranking and cache (contacts.json)
     addressbook.ts Google People API and CardDAV address books
@@ -43,6 +44,7 @@ All under `%APPDATA%\winmail\`:
 | --- | --- |
 | `winmail.json` | `accounts`, `settings`, `secrets` (passwords / Google refresh tokens, encrypted with `safeStorage` = DPAPI), plus queues for snoozed and scheduled mail. Written atomically (tmp + rename); unreadable file is moved aside and the user warned. |
 | `contacts.json` | Per-account contacts from address book and mail history. |
+| `mail-cache.db` (+ `-wal`, `-shm`) | SQLite (`node:sqlite`): folder list and unread counts per account, the newest ≤ 500 messages of each folder visited (summaries and previews), bodies of messages opened (≤ 5 MB each, ≤ 250 MB in all), Gmail category tabs. Plain, unencrypted. Only a cache: a damaged or newer file is deleted and rebuilt, and it works from memory if the disk fails. Folders unopened for 60 days drop their messages. Cleared in Settings > General > Storage. See CACHE.md. |
 
 ## 4. IPC API
 
@@ -55,6 +57,7 @@ Defined in `src/shared/types.ts` (`WinMailApi`), bridged in `src/preload/index.t
 | addGoogleAccount / reauthGoogleAccount / cancelGoogleSignIn | `accounts:*Google` | Google sign-in |
 | getSettings / setSettings | `settings:*` | App settings |
 | listMailboxes | `mail:mailboxes` | Folder tree with unread counts |
+| cachedMailboxes / cachedList / cacheSize / clearCache | `mail:cachedMailboxes`, `mail:cachedList`, `mail:cacheSize`, `mail:clearCache` | The saved copy on this PC, read without a connection |
 | listMessages | `mail:messages` | Newest N summaries of a folder |
 | getMessage | `mail:message` | Full message (marks read) |
 | setFlags | `mail:flags` | Seen / flagged |
@@ -81,15 +84,23 @@ New methods added by roadmap items are listed in the changelog entry that introd
 
 **Compose.** Docked cards (bottom right; minimize, full screen, several at once) and inline replies under the message. Recipient chips (To, Cc, Bcc), From when several accounts, rich text or plain text, attachments, signature, templates. Reply uses Reply-To when present; reply all drops yourself and never uses the original Bcc. Drafts autosave to the Drafts folder; Esc or Ctrl+W saves and closes; Ctrl+Enter sends after the undo delay. See COMPOSE.md.
 
-**Sync.** IMAP IDLE on INBOX pushes new mail; periodic check every 1/5/15/30/60 min or manual. "Downloading N new messages" status in the list footer.
+**Sync.** IMAP IDLE on INBOX pushes new mail; periodic check every 1/5/15/30/60 min or manual. "Downloading N new messages" status in the list footer. Folders and opened messages are saved on this PC (`mail-cache.db`): the sidebar, counts and every folder seen before show at once at startup and work offline, then are brought up to date. A refresh asks the server for its UIDs from the saved range (new and removed mail), the flags that changed (CONDSTORE `CHANGEDSINCE` where available, a full flag read otherwise) and fetches only the new messages; a non-inbox folder whose last LIST-STATUS shows no change is not opened at all. More than 200 new messages in a folder start its list again. Everything that acts on a message sends the folder's UIDVALIDITY with it and is refused if the server renumbered the folder. Mail that arrived while WinMail was closed is not announced.
 
-**Settings.** General: appearance, message content appearance, check interval, load remote content. Accounts: info, server settings, Google re-sign-in, contacts status.
+**Settings.** General: appearance, message content appearance, check interval, load remote content, Storage (size of the saved mail, Clear). Accounts: info, server settings, Google re-sign-in, contacts status.
 
 **Notifications.** Windows toasts for new inbox mail while no WinMail window is focused: sender avatar, subject and preview, inline reply (sent through the undo-send outbox), Archive and Mark as read; more than 3 at once become one summary with Mark all as read. Settings > Notifications: on/off, all mail / Primary only / people I know, per-account switches, preview (full / sender / hidden), sound, quiet hours, test button, unread count on the taskbar button. See NOTIFICATIONS.md.
 
 **Shortcuts.** Ctrl+N new, Ctrl+R reply, Ctrl+Shift+R reply all, Ctrl+Shift+F forward, Ctrl+F search, Ctrl+, settings, Del delete, Up/Down move selection (Shift extends), Ctrl+A select all, Ctrl+Enter send, Esc close. Optional Gmail keys: j/k, e, #, !, r, a, f, s, Shift+I/U, x, b, v, z, c, /.
 
 ## 6. Changelog
+
+### 2026-10-21 — Mail saved on this PC and incremental sync (details, decisions and checklist in CACHE.md)
+- **Saved copy:** new `main/cache.ts` (`MailCache`, `node:sqlite`, no native module) writes the folder list, each visited folder's newest messages and the bodies of opened messages to `%APPDATA%\winmail\mail-cache.db`. Startup seeds the sidebar and counts from it; the first visit to a folder paints from it with no skeleton and then updates quietly; opened messages and Gmail category tabs work offline. All Inboxes keeps an unreachable account's rows.
+- **Incremental sync:** `listMessages` fetches only new messages, removes expunged ones, re-reads only changed flags, and can skip a non-inbox folder entirely when LIST-STATUS shows no change. A refused SEARCH never empties the window; rows the server volunteers are ignored.
+- **Safety:** `uidValidity` travels with every message and with every call that acts on one (`getMessage`, `getSource`, `setFlags`, `move`, `moveTo`, `snooze`, `saveAttachment`, `openDraft`); a renumbered folder refuses the call, wipes its saved copy and emits `mail:changed { reset: true }`. Draft UIDs are remembered with their validity in main. `setFlags` and trash delete now fail when the server refuses (imapflow returns false).
+- **Upkeep:** newest 500 messages per folder, 60-day idle folders dropped, 250 MB of bodies (oldest opened first); account removal or a changed IMAP host/port/user clears an account. Settings > General > Storage shows the size and has Clear.
+- New API methods (with mocks; `?nocache` and `?offline` in mock mode): `cachedMailboxes`, `cachedList`, `cacheSize`, `clearCache`; optional trailing `uidValidity` on the calls above; `MessageSummary.uidValidity`, `MoveResult.uidValidity`, `MailChangedEvent.reset`.
+- Checked with a fake IMAP server driving the real `listMessages` (first visit, no-change refresh downloads nothing, new/flagged/expunged mail, refused search, volunteered rows, load more, 300-message burst, no CONDSTORE, UIDVALIDITY change, skip-without-select), cache unit scripts (write-through, recovery, trim) and the mock UI (instant paint, offline). Not checked with a real account: Gmail and non-Gmail sync, relaunch offline, the renumbered-folder refusal.
 
 ### 2026-10-21 — Message windows, attachments on top, reading pane scrolls again
 - **Fix:** the reading pane didn't scroll. The toolbar refactor put `MessageView` in the column-flex `.reader`, and `.viewer` had no `min-height: 0`, so it grew to the message's height and was clipped. Checked in mock mode: before, the pane was taller than its space with no scroll; after, it scrolls, also with the wheel over an HTML body.
@@ -163,6 +174,7 @@ Status: `[x]` done, `[ ]` planned. *Gmail-only* items only apply to Google accou
 - [x] Load more on scroll
 - [x] Compose: Bcc, attachments (picker + drag and drop), drafts autosave and reopen
 - [x] Desktop notifications for new mail
+- [x] Mail saved on this PC: offline reading, instant startup, incremental sync
 
 ### Tier 2 — productivity
 - [x] Multi-select and bulk actions

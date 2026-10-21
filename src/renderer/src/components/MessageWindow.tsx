@@ -49,7 +49,7 @@ export default function MessageWindowApp() {
       applyReduceMotion(saved.reduceMotion)
       setSettings(saved)
       setSummary(payload)
-      api.getMessage(payload.accountId, payload.mailbox, payload.uid).then(
+      api.getMessage(payload.accountId, payload.mailbox, payload.uid, payload.uidValidity).then(
         (d) => alive && setDetail(d),
         (e) => alive && setError(errText(e))
       )
@@ -76,7 +76,7 @@ export default function MessageWindowApp() {
 
   const saveAttachment = async (index: number) => {
     try {
-      const path = await api.saveAttachment(summary.accountId, summary.mailbox, summary.uid, index)
+      const path = await api.saveAttachment(summary.accountId, summary.mailbox, summary.uid, index, summary.uidValidity)
       if (path) toast(`Saved to ${path}`)
     } catch (e) {
       toast({ text: errText(e), tone: 'error' })

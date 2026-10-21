@@ -101,6 +101,11 @@ export interface MessageSummary {
   threadId?: string
   /** Inbox category worked out by WinMail from sender and headers (see shared/categorize.ts). */
   category?: GmailCategory
+  /**
+   * The folder's UIDVALIDITY when this was listed. Sent back with anything that acts on `uid`, so a message list
+   * saved before the server renumbered the folder cannot act on a different message.
+   */
+  uidValidity?: string
 }
 
 /** Inbox category tabs: Gmail's own on Google accounts, worked out by WinMail elsewhere. */
@@ -141,6 +146,8 @@ export type MoveTarget = 'trash' | 'archive' | 'junk' | 'inbox'
 export interface MoveResult {
   path: string
   uids: number[]
+  /** UIDVALIDITY of the destination, for undoing the move. */
+  uidValidity?: string
 }
 
 /** A file on disk to attach when sending. */
@@ -312,6 +319,8 @@ export interface TestResult {
 export interface MailChangedEvent {
   accountId: string
   path: string
+  /** The folder's UIDs were renumbered: anything remembered about its messages is wrong. */
+  reset?: boolean
 }
 
 /** New messages a mailbox is downloading; `incoming: 0` once the download finishes. */
@@ -345,22 +354,23 @@ export interface WinMailApi {
   search(accountId: string, mailbox: string, query: string, limit?: number): Promise<MessageSummary[]>
   /** Every message of a Gmail conversation, from All Mail. Empty on other providers. */
   listThread(accountId: string, threadId: string): Promise<MessageSummary[]>
-  getMessage(accountId: string, mailbox: string, uid: number): Promise<MessageDetail>
+  getMessage(accountId: string, mailbox: string, uid: number, uidValidity?: string): Promise<MessageDetail>
   /** Raw RFC 822 source. */
-  getSource(accountId: string, mailbox: string, uid: number): Promise<string>
+  getSource(accountId: string, mailbox: string, uid: number, uidValidity?: string): Promise<string>
   setFlags(
     accountId: string,
     mailbox: string,
     uids: number[],
-    flags: { seen?: boolean; flagged?: boolean }
+    flags: { seen?: boolean; flagged?: boolean },
+    uidValidity?: string
   ): Promise<void>
   markAllRead(accountId: string, mailbox: string): Promise<void>
   /** Null when the messages were deleted for good or the server did not say where they went. */
-  move(accountId: string, mailbox: string, uids: number[], target: MoveTarget): Promise<MoveResult | null>
-  moveTo(accountId: string, mailbox: string, uids: number[], dest: string): Promise<MoveResult | null>
+  move(accountId: string, mailbox: string, uids: number[], target: MoveTarget, uidValidity?: string): Promise<MoveResult | null>
+  moveTo(accountId: string, mailbox: string, uids: number[], dest: string, uidValidity?: string): Promise<MoveResult | null>
   /** Moves to the Snoozed folder; back to the inbox, unread, at `until` (ISO). */
-  snooze(accountId: string, mailbox: string, uids: number[], until: string): Promise<void>
-  saveAttachment(accountId: string, mailbox: string, uid: number, index: number): Promise<string | null>
+  snooze(accountId: string, mailbox: string, uids: number[], until: string, uidValidity?: string): Promise<void>
+  saveAttachment(accountId: string, mailbox: string, uid: number, index: number, uidValidity?: string): Promise<string | null>
   /** Save dialog for text, e.g. a message's source. */
   saveText(defaultName: string, text: string): Promise<string | null>
   /** Prints a complete HTML document. */
@@ -387,7 +397,7 @@ export interface WinMailApi {
   saveDraft(input: SendInput): Promise<number | null>
   deleteDraft(accountId: string, uid: number): Promise<void>
   /** A saved draft, attachments extracted to temporary files, ready for Compose. */
-  openDraft(accountId: string, mailbox: string, uid: number): Promise<SendInput>
+  openDraft(accountId: string, mailbox: string, uid: number, uidValidity?: string): Promise<SendInput>
   scheduleSend(input: SendInput, sendAt: string): Promise<ScheduledInfo>
   listScheduled(): Promise<ScheduledInfo[]>
   /** Removes it from the queue and returns it for editing. */
@@ -405,6 +415,23 @@ export interface WinMailApi {
   contactsStatus(accountId: string): Promise<ContactsStatus>
   /** Fires when an account's contacts finish loading. */
   onContactsChanged(cb: (accountId: string) => void): () => void
+
+  /** Folder list as last saved on this PC; null when nothing has been saved for the account. */
+  cachedMailboxes(accountId: string): Promise<MailboxInfo[] | null>
+  /**
+   * A folder's newest messages as last saved on this PC, without asking the server; null when the folder has
+   * not been synced. `view` is a Gmail search such as `category:promotions`, saved from the last time it ran.
+   */
+  cachedList(
+    accountId: string,
+    mailbox: string,
+    limit: number,
+    view?: string
+  ): Promise<{ messages: MessageSummary[]; more: boolean } | null>
+  /** Bytes the saved mail takes on disk. */
+  cacheSize(): Promise<number>
+  /** Deletes the saved mail; it is saved again as mail is read. */
+  clearCache(): Promise<void>
 
   onMailChanged(cb: (e: MailChangedEvent) => void): () => void
   onMailProgress(cb: (e: MailProgressEvent) => void): () => void

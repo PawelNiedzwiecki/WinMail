@@ -427,7 +427,7 @@ export async function reply(
   // Leave any other inline reply first: there is one slot under the message.
   if (host === 'inline') for (const o of allSessions()) if (o.host === 'inline' && !o.hidden) leaveInline(o.id)
 
-  const src = detail ?? (await api.getMessage(summary.accountId, summary.mailbox, summary.uid).catch(() => null))
+  const src = detail ?? (await api.getMessage(summary.accountId, summary.mailbox, summary.uid, summary.uidValidity).catch(() => null))
   const accountId = env.accounts.some((a) => a.id === summary.accountId) ? summary.accountId : env.defaultAccountId()
   if (!accountId) return null
   const parts = replyParts(mode, summary, src, allowRemote)
@@ -466,7 +466,7 @@ async function attachOriginals(id: string, summary: MessageSummary): Promise<voi
   }
   updateSession(id, (s) => ({ attachments: [...s.attachments, placeholder] }))
   try {
-    const original = await api.openDraft(summary.accountId, summary.mailbox, summary.uid)
+    const original = await api.openDraft(summary.accountId, summary.mailbox, summary.uid, summary.uidValidity)
     const files = (original.attachments ?? []).map((a) => ({ ...a, id: attachmentId(), fromOriginal: true }))
     updateSession(id, (s) => ({ attachments: [...s.attachments.filter((a) => a.id !== placeholder.id), ...files] }))
   } catch (e) {
@@ -569,7 +569,7 @@ export async function openFromDrafts(m: MessageSummary): Promise<void> {
     return
   }
   try {
-    const s = fromInput(await api.openDraft(m.accountId, m.mailbox, m.uid), {})
+    const s = fromInput(await api.openDraft(m.accountId, m.mailbox, m.uid, m.uidValidity), {})
     putSession(s)
     activate(s.id)
   } catch (e) {

@@ -10,6 +10,18 @@ const SCHEMA_VERSION = 1
 /** Opened messages larger than this (inline images make some huge) are not kept. */
 export const BODY_MAX_BYTES = 5_000_000
 
+/** Messages kept per folder; older ones are fetched again if the folder is scrolled that far. */
+const KEEP_PER_FOLDER = 500
+
+/** A folder not opened for this long keeps its place in the sidebar but not its messages. */
+const FOLDER_MAX_AGE_MS = 60 * 24 * 60 * 60 * 1000
+
+/** Opened messages kept in total; the ones opened longest ago go first. */
+const BODIES_MAX_BYTES = 250_000_000
+
+/** Most opened messages removed in one trim, so a trim never holds up the app for long. */
+const TRIM_BODIES_PER_PASS = 200
+
 /** Write failures in a row before the file is given up on for this session. */
 const MAX_WRITE_FAILURES = 3
 
@@ -42,6 +54,8 @@ export interface FolderState {
   modseq: string | null
   /** Every message the server has with a UID at or above this is cached. */
   floor: number | null
+  /** Messages cached at or above the floor. */
+  count: number
 }
 
 /** A saved message list, plus what it was saved under. */
@@ -214,7 +228,7 @@ export class MailCache {
     this.stmts.clear()
   }
 
-  private static summary(row: { uid: number; seen: number; flagged: number; summary: string }, a: string, p: string) {
+  private static summary(row: { uid: number; seen: number; flagged: number; summary: string }, a: string, p: string, validity: string) {
     return {
       ...(JSON.parse(row.summary) as MessageSummary),
       key: `${a}|${p}|${row.uid}`,
@@ -222,7 +236,8 @@ export class MailCache {
       mailbox: p,
       uid: row.uid,
       seen: !!row.seen,
-      flagged: !!row.flagged
+      flagged: !!row.flagged,
+      uidValidity: validity
     } satisfies MessageSummary
   }
 
@@ -261,14 +276,51 @@ export class MailCache {
         floor_uid: number | null
       }>('SELECT gen, uid_validity, uid_next, messages, modseq, floor_uid FROM folders WHERE account_id = ? AND path = ?', a, p)
       if (!r) return null
+      const count =
+        r.floor_uid === null
+          ? 0
+          : (this.get<{ n: number }>(
+              'SELECT COUNT(*) AS n FROM messages WHERE account_id = ? AND path = ? AND uid >= ?',
+              a,
+              p,
+              r.floor_uid
+            )?.n ?? 0)
       return {
         gen: r.gen,
         uidValidity: r.uid_validity,
         uidNext: r.uid_next,
         messages: r.messages,
         modseq: r.modseq,
-        floor: r.floor_uid
+        floor: r.floor_uid,
+        count
       }
+    })
+  }
+
+  /** UIDs of the cached window, i.e. every cached message at or above `floor`. */
+  uids(a: string, p: string, floor: number): number[] {
+    return this.guard<number[]>([], false, () =>
+      this.all<{ uid: number }>('SELECT uid FROM messages WHERE account_id = ? AND path = ? AND uid >= ?', a, p, floor).map((r) => r.uid)
+    )
+  }
+
+  /** Previews already saved for these messages, so they are not downloaded again; only while UIDVALIDITY still matches. */
+  previews(a: string, p: string, uids: number[], validity: string): Map<number, string> {
+    return this.guard(new Map<number, string>(), false, () => {
+      const out = new Map<number, string>()
+      const f = this.get<{ uid_validity: string | null }>('SELECT uid_validity FROM folders WHERE account_id = ? AND path = ?', a, p)
+      if (!f || f.uid_validity !== validity) return out
+      for (let i = 0; i < uids.length; i += 200) {
+        const chunk = uids.slice(i, i + 200)
+        const rows = this.db
+          .prepare(`SELECT uid, summary FROM messages WHERE account_id = ? AND path = ? AND uid IN (${chunk.map(() => '?').join(',')})`)
+          .all(a, p, ...chunk) as unknown as { uid: number; summary: string }[]
+        for (const r of rows) {
+          const preview = (JSON.parse(r.summary) as MessageSummary).preview
+          if (preview) out.set(r.uid, preview)
+        }
+      }
+      return out
     })
   }
 
@@ -330,7 +382,7 @@ export class MailCache {
         f.floor_uid,
         limit
       )
-      const messages = rows.map((r) => MailCache.summary(r, a, p)).sort((x, y) => y.date.localeCompare(x.date))
+      const messages = rows.map((r) => MailCache.summary(r, a, p, f.uid_validity!)).sort((x, y) => y.date.localeCompare(x.date))
       return { messages, more: (f.messages ?? 0) > messages.length, uidValidity: f.uid_validity }
     })
   }
@@ -378,6 +430,66 @@ export class MailCache {
           snap.messages,
           snap.modseq,
           floor,
+          Date.now(),
+          a,
+          p
+        )
+      })
+      return true
+    })
+  }
+
+  /**
+   * One sync of a folder that was already cached: new messages, ones that are gone, current flags, and the state
+   * the server was in when the sync began. Returns false when the folder changed since `gen` was read (a trim, a
+   * reset, a clear) or the write failed; nothing is written then.
+   */
+  applySync(
+    a: string,
+    p: string,
+    gen: number,
+    sync: {
+      upsert: MessageSummary[]
+      remove: number[]
+      flags: { uid: number; seen: boolean; flagged: boolean }[]
+      floor: number
+      snap: SnapState
+    }
+  ): boolean {
+    return this.guard(false, true, () => {
+      this.tx(() => {
+        if (!this.get('SELECT 1 FROM folders WHERE account_id = ? AND path = ? AND gen = ?', a, p, gen)) throw new Stale()
+        if (sync.remove.length) this.drop(a, p, sync.remove, false)
+        for (const m of sync.upsert) {
+          this.run(
+            'INSERT OR REPLACE INTO messages (account_id, path, uid, seen, flagged, date, summary) VALUES (?, ?, ?, ?, ?, ?, ?)',
+            a,
+            p,
+            m.uid,
+            m.seen ? 1 : 0,
+            m.flagged ? 1 : 0,
+            m.date,
+            MailCache.pack(m)
+          )
+        }
+        for (const f of sync.flags) {
+          this.run(
+            'UPDATE messages SET seen = ?, flagged = ? WHERE account_id = ? AND path = ? AND uid = ?',
+            f.seen ? 1 : 0,
+            f.flagged ? 1 : 0,
+            a,
+            p,
+            f.uid
+          )
+        }
+        this.run(
+          `UPDATE folders SET uid_validity = ?, uid_next = ?, messages = ?, modseq = ?, floor_uid = ?, visited_at = ?
+           WHERE account_id = ? AND path = ?`,
+          sync.snap.uidValidity,
+          sync.snap.uidNext,
+          sync.snap.messages,
+          sync.snap.modseq,
+          sync.floor,
           Date.now(),
           a,
           p
@@ -536,6 +648,69 @@ export class MailCache {
     })
   }
 
+  /**
+   * A message opened before, with the flags it has now. `wasSeen` is false when it is still unread on the server
+   * as far as is known (it was opened, then marked unread again).
+   */
+  body(a: string, p: string, uid: number): { detail: MessageDetail; uidValidity: string; wasSeen: boolean } | null {
+    return this.guard<{ detail: MessageDetail; uidValidity: string; wasSeen: boolean } | null>(null, false, () => {
+      const b = this.get<{ detail: string; uid_validity: string | null }>(
+        `SELECT b.detail, f.uid_validity FROM bodies b JOIN folders f ON f.account_id = b.account_id AND f.path = b.path
+         WHERE b.account_id = ? AND b.path = ? AND b.uid = ?`,
+        a,
+        p,
+        uid
+      )
+      if (!b || b.uid_validity === null) return null
+      const m = this.get<{ seen: number; flagged: number }>(
+        'SELECT seen, flagged FROM messages WHERE account_id = ? AND path = ? AND uid = ?',
+        a,
+        p,
+        uid
+      )
+      const detail = JSON.parse(b.detail) as MessageDetail
+      detail.uidValidity = b.uid_validity
+      if (m) {
+        detail.seen = true
+        detail.flagged = !!m.flagged
+      }
+      return { detail, uidValidity: b.uid_validity, wasSeen: m ? !!m.seen : true }
+    })
+  }
+
+  /** A saved search (a Gmail category tab), with the flags the messages have now. */
+  view(a: string, p: string, name: string): MessageSummary[] | null {
+    return this.guard<MessageSummary[] | null>(null, false, () => {
+      const v = this.get<{ rows: string }>('SELECT rows FROM views WHERE account_id = ? AND path = ? AND name = ?', a, p, name)
+      if (!v) return null
+      return (JSON.parse(v.rows) as MessageSummary[]).map((r) => {
+        const m = this.get<{ seen: number; flagged: number }>(
+          'SELECT seen, flagged FROM messages WHERE account_id = ? AND path = ? AND uid = ?',
+          a,
+          p,
+          r.uid
+        )
+        return m ? { ...r, seen: !!m.seen, flagged: !!m.flagged } : r
+      })
+    })
+  }
+
+  /** Only kept while the folder is still under the UIDVALIDITY the result was read under. */
+  saveView(a: string, p: string, name: string, rows: MessageSummary[], validity: string): boolean {
+    return this.guard(false, true, () => {
+      const f = this.get<{ uid_validity: string | null }>('SELECT uid_validity FROM folders WHERE account_id = ? AND path = ?', a, p)
+      if (!f || f.uid_validity !== validity) return false
+      this.run(
+        'INSERT OR REPLACE INTO views (account_id, path, name, rows) VALUES (?, ?, ?, ?)',
+        a,
+        p,
+        name,
+        JSON.stringify(rows)
+      )
+      return true
+    })
+  }
+
   // ---------- Accounts and housekeeping ----------
 
   forgetAccount(a: string): void {
@@ -550,6 +725,77 @@ export class MailCache {
       const keep = new Set(accountIds)
       for (const r of this.all<{ account_id: string }>('SELECT DISTINCT account_id FROM folders')) {
         if (!keep.has(r.account_id)) this.run('DELETE FROM folders WHERE account_id = ?', r.account_id)
+      }
+    })
+  }
+
+  /**
+   * Keeps the file from growing without end: the newest `keep` messages of each folder, nothing at all for folders
+   * not opened in a long time, and the most recently opened bodies up to a size. `busy` holds folders (account|path)
+   * that are being synced right now and are left alone. The limits are only changed by tests.
+   */
+  trim(busy: Set<string>, limits: { keep?: number; maxAgeMs?: number; bodiesMax?: number } = {}): void {
+    const keep = limits.keep ?? KEEP_PER_FOLDER
+    const maxAge = limits.maxAgeMs ?? FOLDER_MAX_AGE_MS
+    const bodiesMax = limits.bodiesMax ?? BODIES_MAX_BYTES
+    this.guard(undefined, true, () => {
+      let freed = false
+      const folders = this.all<{ account_id: string; path: string; floor_uid: number | null; visited_at: number | null }>(
+        'SELECT account_id, path, floor_uid, visited_at FROM folders WHERE floor_uid IS NOT NULL'
+      )
+      for (const f of folders) {
+        if (busy.has(`${f.account_id}|${f.path}`)) continue
+        this.tx(() => {
+          if (f.visited_at !== null && Date.now() - f.visited_at > maxAge) {
+            // Back to a first visit; UIDVALIDITY stays, so the bodies still opened here remain valid.
+            this.run('DELETE FROM messages WHERE account_id = ? AND path = ?', f.account_id, f.path)
+            this.run('DELETE FROM views WHERE account_id = ? AND path = ?', f.account_id, f.path)
+            this.run(
+              `UPDATE folders SET gen = gen + 1, uid_next = NULL, messages = NULL, modseq = NULL, floor_uid = NULL
+               WHERE account_id = ? AND path = ?`,
+              f.account_id,
+              f.path
+            )
+            freed = true
+            return
+          }
+          const edge = this.get<{ uid: number }>(
+            'SELECT uid FROM messages WHERE account_id = ? AND path = ? AND uid >= ? ORDER BY uid DESC LIMIT 1 OFFSET ?',
+            f.account_id,
+            f.path,
+            f.floor_uid!,
+            keep
+          )
+          // The message just past the newest `keep`: everything at or below it goes, and the floor moves above it.
+          if (!edge) return
+          this.run('DELETE FROM messages WHERE account_id = ? AND path = ? AND uid <= ?', f.account_id, f.path, edge.uid)
+          this.run(
+            'UPDATE folders SET gen = gen + 1, floor_uid = ? WHERE account_id = ? AND path = ?',
+            edge.uid + 1,
+            f.account_id,
+            f.path
+          )
+          freed = true
+        })
+      }
+      let total = this.get<{ n: number | null }>('SELECT SUM(size) AS n FROM bodies')?.n ?? 0
+      if (total > bodiesMax) {
+        const oldest = this.all<{ account_id: string; path: string; uid: number; size: number }>(
+          'SELECT account_id, path, uid, size FROM bodies ORDER BY opened_at LIMIT ?',
+          TRIM_BODIES_PER_PASS
+        )
+        this.tx(() => {
+          for (const b of oldest) {
+            if (total <= bodiesMax) break
+            this.run('DELETE FROM bodies WHERE account_id = ? AND path = ? AND uid = ?', b.account_id, b.path, b.uid)
+            total -= b.size
+            freed = true
+          }
+        })
+      }
+      if (freed && !this.memory) {
+        this.db.exec('PRAGMA incremental_vacuum')
+        this.db.exec('PRAGMA wal_checkpoint(TRUNCATE)')
       }
     })
   }
