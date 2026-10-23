@@ -1,9 +1,10 @@
-import { app, BrowserWindow, dialog, ipcMain, nativeTheme, net } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, nativeTheme, net, shell } from 'electron'
 import { writeFile } from 'fs/promises'
 import type {
   AccountInput,
   AccountUpdate,
   AiInput,
+  InviteAnswer,
   MoveTarget,
   SendInput,
   Settings
@@ -134,6 +135,14 @@ export function registerIpc(store: Store, mail: MailService, contacts: Contacts,
     const file = await saveDialog(filename)
     if (file) await writeFile(file, content)
     return file
+  })
+  handle('mail:answerInvite', (id: string, path: string, uid: number, answer: InviteAnswer, v?: string) =>
+    mail.answerInvite(id, path, uid, answer, v)
+  )
+  handle('mail:openInvite', async (id: string, path: string, uid: number, v?: string) => {
+    const file = await mail.inviteFile(id, path, uid, v)
+    const err = await shell.openPath(file)
+    if (err) throw new Error(`No calendar app opened the invitation: ${err}`)
   })
   handle('file:saveText', async (name: string, text: string) => {
     const file = await saveDialog(name)

@@ -28,6 +28,7 @@ import {
   type Account,
   type GmailCategory,
   type MailboxInfo,
+  type InviteAnswer,
   type MessageDetail,
   type MessageSummary,
   type MoveResult,
@@ -959,6 +960,29 @@ export default function App() {
 
   const allowRemoteFor = (m: MessageSummary | null) => settings.loadRemoteContent || (!!m && remoteKeys.has(m.key))
 
+  const answerInvite = async (answer: InviteAnswer) => {
+    if (!selected || !detail?.invite) return
+    const m = selected
+    try {
+      const invite = await api.answerInvite(m.accountId, m.mailbox, m.uid, answer, m.uidValidity)
+      setDetail((d) => {
+        if (!d || d.key !== m.key) return d
+        const next = { ...d, invite }
+        cacheDetail(next)
+        return next
+      })
+      toast(`Answer sent to ${invite.organizer?.name || invite.organizer?.email || 'the organiser'}`)
+    } catch (e) {
+      showError(e)
+      throw e
+    }
+  }
+
+  const openInvite = () => {
+    if (!selected) return
+    api.openInvite(selected.accountId, selected.mailbox, selected.uid, selected.uidValidity).catch(showError)
+  }
+
   const printMessage = async () => {
     if (!detail) return
     try {
@@ -1419,6 +1443,8 @@ export default function App() {
               aiSummary={aiSummary && aiSummary.key === selected?.key ? aiSummary : null}
               onCloseSummary={() => setAiSummary(null)}
               onUnsubscribe={unsubscribe}
+              onAnswerInvite={answerInvite}
+              onOpenInvite={openInvite}
             />
             </div>
           </div>

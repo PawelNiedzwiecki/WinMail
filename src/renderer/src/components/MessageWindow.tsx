@@ -1,6 +1,6 @@
 import { Printer } from 'lucide-react'
 import { useEffect, useState } from 'react'
-import { DEFAULT_SETTINGS, type MessageDetail, type MessageSummary, type Settings } from '@shared/types'
+import { DEFAULT_SETTINGS, type InviteAnswer, type MessageDetail, type MessageSummary, type Settings } from '@shared/types'
 import { api } from '../api'
 import { setComposeEnv } from '../compose/actions'
 import type { PopoutMessage } from '../compose/popout'
@@ -83,6 +83,23 @@ export default function MessageWindowApp() {
     }
   }
 
+  const answerInvite = async (answer: InviteAnswer) => {
+    try {
+      const invite = await api.answerInvite(summary.accountId, summary.mailbox, summary.uid, answer, summary.uidValidity)
+      setDetail((d) => (d ? { ...d, invite } : d))
+      toast(`Answer sent to ${invite.organizer?.name || invite.organizer?.email || 'the organiser'}`)
+    } catch (e) {
+      toast({ text: errText(e), tone: 'error' })
+      throw e
+    }
+  }
+
+  const openInvite = () => {
+    api
+      .openInvite(summary.accountId, summary.mailbox, summary.uid, summary.uidValidity)
+      .catch((e) => toast({ text: errText(e), tone: 'error' }))
+  }
+
   const moreItems = (): MenuItem[] => [
     {
       label: 'Print…',
@@ -112,6 +129,8 @@ export default function MessageWindowApp() {
         onReply={reply}
         onEditDraft={() => {}}
         moreItems={moreItems}
+        onAnswerInvite={answerInvite}
+        onOpenInvite={openInvite}
       />
       <ToastStack />
     </div>

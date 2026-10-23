@@ -131,6 +131,36 @@ export interface MessageDetail extends MessageSummary {
   attachments: AttachmentInfo[]
   /** From List-Unsubscribe; null when the sender offers no way out. */
   unsubscribe: Unsubscribe | null
+  /** A calendar invitation in the message, or null. Missing on messages saved before WinMail looked for them. */
+  invite?: CalendarInvite | null
+}
+
+/** An RSVP answer, as the iCalendar PARTSTAT value. */
+export type InviteAnswer = 'ACCEPTED' | 'TENTATIVE' | 'DECLINED'
+
+export interface InviteAttendee extends Address {
+  /** iCalendar PARTSTAT: NEEDS-ACTION, ACCEPTED, TENTATIVE, DECLINED, DELEGATED. */
+  status: string
+}
+
+/** An event sent by mail (iCalendar). */
+export interface CalendarInvite {
+  /** REQUEST: an invitation or update; CANCEL: called off; REPLY: a guest answered; PUBLISH: for information. */
+  method: string
+  uid: string
+  summary: string
+  /** An instant (ISO) for timed events; a date ("2026-10-27") for all-day ones, whose `end` is the day after. */
+  start: string
+  end: string | null
+  allDay: boolean
+  recurring: boolean
+  location: string | null
+  organizer: Address | null
+  attendees: InviteAttendee[]
+  /** Your answer: as the invitation has it, or the last one sent from WinMail. */
+  answer: InviteAnswer | null
+  /** You organised it: nothing to answer. */
+  isOrganizer: boolean
 }
 
 export interface Unsubscribe {
@@ -371,6 +401,10 @@ export interface WinMailApi {
   /** Moves to the Snoozed folder; back to the inbox, unread, at `until` (ISO). */
   snooze(accountId: string, mailbox: string, uids: number[], until: string, uidValidity?: string): Promise<void>
   saveAttachment(accountId: string, mailbox: string, uid: number, index: number, uidValidity?: string): Promise<string | null>
+  /** Answers a calendar invitation: emails the organiser an iCalendar reply. Returns the invite with your answer. */
+  answerInvite(accountId: string, mailbox: string, uid: number, answer: InviteAnswer, uidValidity?: string): Promise<CalendarInvite>
+  /** Opens a message's invitation in the default calendar app (Outlook, Calendar) to add it there. */
+  openInvite(accountId: string, mailbox: string, uid: number, uidValidity?: string): Promise<void>
   /** Save dialog for text, e.g. a message's source. */
   saveText(defaultName: string, text: string): Promise<string | null>
   /** Prints a complete HTML document. */

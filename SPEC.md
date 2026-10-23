@@ -63,6 +63,7 @@ Defined in `src/shared/types.ts` (`WinMailApi`), bridged in `src/preload/index.t
 | setFlags | `mail:flags` | Seen / flagged |
 | move | `mail:move` | Move to inbox / archive / junk / trash |
 | saveAttachment | `mail:saveAttachment` | Save dialog + write |
+| answerInvite / openInvite | `mail:answerInvite`, `mail:openInvite` | RSVP to a calendar invitation (iMIP REPLY to the organiser); open its .ics in the default calendar app |
 | send | `mail:send` | SMTP send (+ append to Sent where needed) |
 | queueSend / cancelScheduled / takeFailedSends / onOutbox | `outbox:queue`, `outbox:cancel`, `outbox:takeFailed`, event `outbox:event` | Undo send: held for `undoSendSec`, then sent; failures come back once |
 | addDroppedFiles / saveClipboardImage | `compose:addFiles`, `compose:saveImage` | Attach dropped files or a pasted image (paths are checked in main) |
@@ -80,7 +81,7 @@ New methods added by roadmap items are listed in the changelog entry that introd
 
 **Message list.** Newest 60 per folder (unified inbox merges accounts by date); "Load Older Messages" raises the limit by 60. Rows show sender, date, subject, preview, unread dot, flag, attachment clip, account label in unified view. Right-click menu: reply, reply all, forward, read/unread, flag, move to inbox, archive, Move to…, Snooze…, junk, delete. Older messages load on scroll. Optional conversation grouping with a count badge. Multi-select with Ctrl/Shift-click. Search filters loaded messages at once, then searches the server (Gmail operators on Google). Gmail inboxes have category tabs.
 
-**Reading.** HTML sanitised with DOMPurify in a sandboxed iframe; remote content blocked until allowed (or setting on). Message appearance light/dark/same as app. Plain text linkified. Attachments listed above the body, click to save. Double-click a message in the list to open it in its own window. Opening marks read (the whole conversation when grouped). More menu: Print, Show Original, Summarise (Claude key), Move to, Snooze. Mailing lists get an Unsubscribe banner.
+**Reading.** HTML sanitised with DOMPurify in a sandboxed iframe; remote content blocked until allowed (or setting on). Message appearance light/dark/same as app. Plain text linkified. Attachments listed above the body, click to save. Double-click a message in the list to open it in its own window. Opening marks read (the whole conversation when grouped). More menu: Print, Show Original, Summarise (Claude key), Move to, Snooze. Mailing lists get an Unsubscribe banner. Calendar invitations show an event card: date, time in your time zone, place, organiser and guests, Yes / Maybe / No, Add to Calendar.
 
 **Compose.** Docked cards (bottom right; minimize, full screen, several at once) and inline replies under the message. Recipient chips (To, Cc, Bcc), From when several accounts, rich text or plain text, attachments, signature, templates. Reply uses Reply-To when present; reply all drops yourself and never uses the original Bcc. Drafts autosave to the Drafts folder; Esc or Ctrl+W saves and closes; Ctrl+Enter sends after the undo delay. See COMPOSE.md.
 
@@ -93,6 +94,14 @@ New methods added by roadmap items are listed in the changelog entry that introd
 **Shortcuts.** Ctrl+N new, Ctrl+R reply, Ctrl+Shift+R reply all, Ctrl+Shift+F forward, Ctrl+F search, Ctrl+, settings, Del delete, Up/Down move selection (Shift extends), Ctrl+A select all, Ctrl+Enter send, Esc close. Optional Gmail keys: j/k, e, #, !, r, a, f, s, Shift+I/U, x, b, v, z, c, /.
 
 ## 6. Changelog
+
+### 2026-10-23 — Calendar invitations
+- Messages with an iCalendar part (Outlook, Google Calendar, iCloud invitations; a text/calendar alternative or an attached .ics) show an **event card** above the attachments: title, date tile, when (in your time zone, all-day and multi-day handled), place with links, organiser and guest count (hover for each guest's answer), Repeats for series. Cancellations are struck through; a guest's reply reads "Sam Patel accepted".
+- **Yes / Maybe / No** emails the organiser an iMIP REPLY (RFC 5546): `Accepted: …` with a `text/calendar; method=REPLY` part holding the event's UID, SEQUENCE, times and time zones and you as the only attendee, so the organiser's calendar records it. Sent through SMTP like other mail, with a copy in Sent. The answer is kept with the saved message.
+- **Add to Calendar** (Open in Calendar for cancellations and replies) writes the .ics to a temporary file and opens it in the default calendar app, which adds, updates or removes the event.
+- The inline text/calendar part no longer shows as an unnamed attachment.
+- New: `main/calendar.ts` (`parseInvite`, `buildReply`, using `ical.js` for Outlook's own time zone definitions), `components/InviteCard.tsx`, `MessageDetail.invite`, `CalendarInvite` / `InviteAnswer` types, `mail.answerInvite` / `inviteFile`; `send()` takes an optional calendar part. Messages saved locally before this are fetched once more if they carry an invitation (the saved copy is used offline).
+- Checked: parser and reply tests (Outlook VTIMEZONE in winter and summer time, UTC, all-day, recurring, cancel, bad input, reply round-trip, UTC DTSTAMP); the MIME nodemailer builds; mock mode UI in light, dark and a narrow window. Not checked against a real organiser's calendar.
 
 ### 2026-10-21 — Mail saved on this PC and incremental sync (details, decisions and checklist in CACHE.md)
 - **Saved copy:** new `main/cache.ts` (`MailCache`, `node:sqlite`, no native module) writes the folder list, each visited folder's newest messages and the bodies of opened messages to `%APPDATA%\winmail\mail-cache.db`. Startup seeds the sidebar and counts from it; the first visit to a folder paints from it with no skeleton and then updates quietly; opened messages and Gmail category tabs work offline. All Inboxes keeps an unreachable account's rows.
@@ -203,5 +212,5 @@ Status: `[x]` done, `[ ]` planned. *Gmail-only* items only apply to Google accou
 - labels in mails
 - integrating AI to summarise mails or search specific criteria
 - ~~picking up attachments at the top of the mail~~ done 2026-10-21
-- picking up any additional events etc.
+- ~~picking up any additional events etc.~~ calendar invitations done 2026-10-23
 - ~~redesign notifications~~ done 2026-10-21 (NOTIFICATIONS.md)

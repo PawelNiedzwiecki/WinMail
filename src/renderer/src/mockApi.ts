@@ -15,6 +15,13 @@ import {
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 const ago = (mins: number) => new Date(Date.now() - mins * 60_000).toISOString()
+/** Tomorrow at `hour`:00, local time. */
+const tomorrowAt = (hour: number) => {
+  const d = new Date()
+  d.setDate(d.getDate() + 1)
+  d.setHours(hour, 0, 0, 0)
+  return d.toISOString()
+}
 
 export function createMockApi(): WinMailApi {
   const params = new URLSearchParams(location.search)
@@ -147,6 +154,26 @@ export function createMockApi(): WinMailApi {
       'You travelled 9 times this week.\n\nTotal charged: £27.40', 60 * 26, { seen: true }),
     msg('gmail', 'INBOX', ['Taylor, Contoso Careers', 'careers@contoso.example'], 'Frontend Engineer role',
       'Hi Alex,\n\nI came across your profile and think you could be a great fit. Hybrid, two days in the office.\n\nTaylor', 60 * 50, { seen: true, flagged: true }),
+    msg('gmail', 'INBOX', ['Jamie Rivera', 'jamie.rivera@example.com'], 'Invitation: Design review',
+      'Jamie Rivera has invited you to Design review.\n\nWalk through the new compose, then questions.', 25, {
+        invite: {
+          method: 'REQUEST',
+          uid: 'design-review@mock',
+          summary: 'Design review',
+          start: tomorrowAt(14),
+          end: tomorrowAt(15),
+          allDay: false,
+          recurring: false,
+          location: 'Room 4 / https://meet.example.com/design-review',
+          organizer: { name: 'Jamie Rivera', email: 'jamie.rivera@example.com' },
+          attendees: [
+            { name: 'Alex Morgan', email: 'alex.morgan@gmail.example', status: 'NEEDS-ACTION' },
+            { name: 'Sam Patel', email: 'sam.patel@example.org', status: 'ACCEPTED' }
+          ],
+          answer: null,
+          isOrganizer: false
+        }
+      }),
     msg('icloud', 'Receipts', ['Fabrikam Store', 'orders@fabrikam.example'], 'Your receipt from Fabrikam',
       'Thanks for your purchase.', 60 * 24 * 9, { seen: true })
   ]
@@ -165,6 +192,7 @@ export function createMockApi(): WinMailApi {
     attachments: _a,
     references: _r,
     unsubscribe: _u,
+    invite: _i,
     ...s
   }: MessageDetail) => s as MessageSummary
 
@@ -332,6 +360,20 @@ export function createMockApi(): WinMailApi {
     },
     async saveAttachment() {
       return null
+    },
+    async answerInvite(id, mailbox, uid, answer) {
+      await sleep(600)
+      const m = messages.find((x) => x.accountId === id && x.mailbox === mailbox && x.uid === uid)
+      if (!m?.invite) throw new Error('This message has no calendar invitation.')
+      m.invite = {
+        ...m.invite,
+        answer,
+        attendees: m.invite.attendees.map((a) => (a.email.startsWith('alex.') ? { ...a, status: answer } : a))
+      }
+      return m.invite
+    },
+    async openInvite() {
+      console.info('The invitation opens in the calendar app here in WinMail.')
     },
     async saveText(name) {
       return `Downloads\\${name}`

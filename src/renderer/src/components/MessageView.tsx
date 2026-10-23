@@ -15,7 +15,7 @@ import {
 } from 'lucide-react'
 import { AnimatePresence } from 'motion/react'
 import { useEffect, useState, type ReactNode } from 'react'
-import type { Address, MessageAppearance, MessageDetail, MessageSummary, Unsubscribe } from '@shared/types'
+import type { Address, InviteAnswer, MessageAppearance, MessageDetail, MessageSummary, Unsubscribe } from '@shared/types'
 import { api } from '../api'
 import { Collapse } from './Collapse'
 import { ContextMenu, type MenuItem } from './ContextMenu'
@@ -24,6 +24,7 @@ import { usePrefersDark } from '../usePrefersDark'
 import { canReplyAll } from '../compose/actions'
 import type { ReplyMode } from '../compose/sessions'
 import { HtmlBody, hasRemoteContent } from './HtmlBody'
+import { InviteCard } from './InviteCard'
 import { InlineReply } from './compose/InlineReply'
 import { UnsubscribeDialog } from './UnsubscribeDialog'
 
@@ -52,6 +53,9 @@ interface Props {
   aiSummary?: { text: string | null; error: string | null } | null
   onCloseSummary?: () => void
   onUnsubscribe?: (u: Unsubscribe) => void
+  /** RSVP to the message's calendar invitation; rejects when it couldn't be sent. */
+  onAnswerInvite?: (answer: InviteAnswer) => Promise<void>
+  onOpenInvite?: () => void
 }
 
 const fmtList = (list: Address[]) =>
@@ -74,7 +78,9 @@ export function MessageView({
   moreItems,
   aiSummary: ai,
   onCloseSummary,
-  onUnsubscribe
+  onUnsubscribe,
+  onAnswerInvite,
+  onOpenInvite
 }: Props) {
   const appDark = usePrefersDark()
   const dark = messageAppearance === 'app' ? appDark : messageAppearance === 'dark'
@@ -228,6 +234,10 @@ export function MessageView({
             </button>
           </div>
         </Collapse>
+
+        {detail?.invite && onAnswerInvite && onOpenInvite && (
+          <InviteCard invite={detail.invite} onAnswer={onAnswerInvite} onOpen={onOpenInvite} />
+        )}
 
         {/* Attachments sit above the body, so they're found without scrolling past a long message. */}
         {detail && detail.attachments.length > 0 && (
