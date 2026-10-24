@@ -55,7 +55,7 @@ const when = (iso: string) => new Date(iso).toLocaleString('en-GB', { dateStyle:
 const isPng = (url: unknown): url is string =>
   typeof url === 'string' && url.startsWith('data:image/png;base64,') && url.length < MAX_IMAGE_CHARS
 /** Windows keeps a toast's tag to 64 characters; message keys can be longer. */
-const tag = (key: string) => createHash('sha1').update(key).digest('hex').slice(0, 32)
+const tag = (key: string) => createHash('sha256').update(key).digest('hex').slice(0, 32)
 
 /** "Jane", "Jane and Adam", "Jane, Adam and 3 others". */
 function senders(list: MessageSummary[]): string {
