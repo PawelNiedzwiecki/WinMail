@@ -1,5 +1,5 @@
 import { SquarePen, Search, RefreshCw, X } from 'lucide-react'
-import type { ReactNode } from 'react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
 
 interface Props {
   hasAccounts: boolean
@@ -12,6 +12,14 @@ interface Props {
 
 /** Global bar: compose, refresh and search. Per-message actions live in ActionBar. */
 export function Toolbar(p: Props) {
+  // The refresh icon finishes the turn it's on instead of snapping back when the check ends.
+  const [spinning, setSpinning] = useState(false)
+  const refreshing = useRef(p.refreshing)
+  refreshing.current = p.refreshing
+  useEffect(() => {
+    if (p.refreshing) setSpinning(true)
+  }, [p.refreshing])
+
   return (
     <div className="toolbar">
       <button
@@ -25,7 +33,11 @@ export function Toolbar(p: Props) {
         Compose
       </button>
       <TbButton title="Get New Mail" disabled={!p.hasAccounts} onClick={p.onRefresh}>
-        <RefreshCw size={16} className={p.refreshing ? 'spin' : ''} />
+        <RefreshCw
+          size={16}
+          className={spinning ? 'spin' : ''}
+          onAnimationIteration={() => !refreshing.current && setSpinning(false)}
+        />
       </TbButton>
       <div className="tb-spacer" />
       <label className="search">
@@ -58,11 +70,13 @@ export function TbButton(props: {
   title: string
   disabled?: boolean
   onClick: () => void
+  /** Turns red on hover, for destructive actions. */
+  danger?: boolean
   children: ReactNode
 }) {
   return (
     <button
-      className="tb-btn"
+      className={props.danger ? 'tb-btn is-danger' : 'tb-btn'}
       title={props.title}
       aria-label={props.title}
       disabled={props.disabled}

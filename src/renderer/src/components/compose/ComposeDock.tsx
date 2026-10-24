@@ -1,8 +1,10 @@
 import { ChevronUp } from 'lucide-react'
+import { AnimatePresence, motion } from 'motion/react'
 import { useEffect, useMemo, useState } from 'react'
 import { activate, expand } from '../../compose/actions'
 import { layoutDock, MORE_W } from '../../compose/dockLayout'
 import { getSession, useSessionList } from '../../compose/sessions'
+import { exitTransition } from '../../motion'
 import { ContextMenu, type MenuItem } from '../ContextMenu'
 import { ComposeWindow } from './ComposeWindow'
 
@@ -22,28 +24,41 @@ export function ComposeDock() {
   const full = docked.find((e) => e.expanded)
   const layout = useMemo(() => layoutDock(docked.filter((e) => !e.expanded), width), [docked, width])
 
-  if (!docked.length) return null
-
   const hiddenItems: MenuItem[] = layout.hidden.map((id) => ({
     label: getSession(id)?.subject.trim() || 'New Message',
     onSelect: () => activate(id)
   }))
 
+  // Rendered even when empty, so the last card can animate out.
   return (
     <div className="dock">
-      {full && <div className="compose-scrim" onMouseDown={() => expand(full.id, false)} />}
-      {docked.map((e) =>
-        // Hidden cards stay mounted but out of sight, so their editors keep what was typed.
-        full?.id === e.id ? (
-          <ComposeWindow key={e.id} id={e.id} right={0} width={layout.cardWidth} />
-        ) : layout.right[e.id] !== undefined ? (
-          <ComposeWindow key={e.id} id={e.id} right={layout.right[e.id]!} width={layout.cardWidth} />
-        ) : (
-          <div key={e.id} className="dock-parked" aria-hidden>
-            <ComposeWindow id={e.id} right={0} width={layout.cardWidth} />
-          </div>
-        )
-      )}
+      <AnimatePresence>
+        {full && (
+          <motion.div
+            key="scrim"
+            className="compose-scrim"
+            onMouseDown={() => expand(full.id, false)}
+            initial={false}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0, transition: exitTransition }}
+          />
+        )}
+      </AnimatePresence>
+      <AnimatePresence>
+        {docked.map((e) => {
+          // Cards that don't fit stay mounted (same element, so nothing remounts), just not shown.
+          const parked = full?.id !== e.id && layout.right[e.id] === undefined
+          return (
+            <ComposeWindow
+              key={e.id}
+              id={e.id}
+              right={full?.id === e.id || parked ? 0 : layout.right[e.id]!}
+              width={layout.cardWidth}
+              parked={parked}
+            />
+          )
+        })}
+      </AnimatePresence>
       {layout.moreRight !== null && (
         <button
           className="dock-more"

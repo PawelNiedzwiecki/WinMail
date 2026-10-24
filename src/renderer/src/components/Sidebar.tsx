@@ -18,6 +18,7 @@ import {
 } from 'lucide-react'
 import { useState, type ReactNode } from 'react'
 import type { Account, MailboxInfo, SpecialUse } from '@shared/types'
+import { Collapse } from './Collapse'
 
 export type Selection = { kind: 'all-inboxes' } | { kind: 'mailbox'; accountId: string; path: string }
 
@@ -111,9 +112,8 @@ export function Sidebar(p: Props) {
                   : undefined
               }
             />
-            {enabled.length > 1 &&
-              !collapsed.inboxes &&
-              enabled.map((a) => {
+            <Collapse open={enabled.length > 1 && !collapsed.inboxes}>
+              {enabled.map((a) => {
                 const path = inboxPath(p.mailboxes[a.id])
                 const box = p.mailboxes[a.id]?.find((b) => b.path === path)
                 return (
@@ -129,9 +129,10 @@ export function Sidebar(p: Props) {
                   />
                 )
               })}
-            {p.scheduledCount > 0 && (
+            </Collapse>
+            <Collapse open={p.scheduledCount > 0}>
               <Item icon={Clock} label="Scheduled" count={p.scheduledCount} selected={false} onClick={p.onOpenScheduled} />
-            )}
+            </Collapse>
           </Section>
         )}
 
@@ -143,7 +144,11 @@ export function Sidebar(p: Props) {
             open={!collapsed[a.id]}
             onToggle={() => toggle(a.id)}
           >
-            {!p.mailboxes[a.id] && !p.errors[a.id] && <div className="sb-loading">Loading…</div>}
+            {!p.mailboxes[a.id] && !p.errors[a.id] && <div className="sb-loading" role="status" aria-label="Loading folders">
+                {[62, 48, 70, 54].map((w, i) => (
+                  <span key={i} className="skel-line" style={{ width: `${w}%` }} />
+                ))}
+              </div>}
             {p.mailboxes[a.id]?.map((b) => (
               <Item
                 key={b.path}
@@ -195,7 +200,12 @@ function Item(props: {
     >
       <Icon size={16} strokeWidth={1.8} className="sb-icon" />
       <span className="sb-label">{props.label}</span>
-      {props.count ? <span className="sb-count">{props.count}</span> : null}
+      {/* Keyed by the number so it ticks when new mail arrives or a message is read. */}
+      {props.count ? (
+        <span key={props.count} className="sb-count">
+          {props.count}
+        </span>
+      ) : null}
       {props.expander && (
         <span
           className="sb-expander"
@@ -208,6 +218,7 @@ function Item(props: {
         >
           <ChevronDown
             size={12}
+            className="sb-expander-chevron"
             style={{ transform: props.expander.open ? 'none' : 'rotate(-90deg)' }}
           />
         </span>
@@ -240,8 +251,10 @@ function Section(props: {
           style={{ transform: props.open ? 'none' : 'rotate(-90deg)' }}
         />
       </button>
-      {props.open && <div>{props.children}</div>}
-      {props.open && props.warning && <div className="sb-error">{props.warning}</div>}
+      <Collapse open={props.open}>
+        {props.children}
+        {props.warning && <div className="sb-error">{props.warning}</div>}
+      </Collapse>
     </div>
   )
 }

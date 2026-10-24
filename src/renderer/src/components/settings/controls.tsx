@@ -1,4 +1,6 @@
-import type { ReactNode } from 'react'
+import { LayoutGroup, motion } from 'motion/react'
+import { useId, type ReactNode } from 'react'
+import { dur, ease } from '../../motion'
 
 /** On/off setting; a real switch for assistive technology. */
 export function Switch({ checked, onChange, label }: { checked: boolean; onChange: (v: boolean) => void; label: string }) {
@@ -29,22 +31,35 @@ export function Segmented<T extends string>(p: {
   onChange: (v: T) => void
   label: string
 }) {
+  // Each control gets its own group, so the thumb slides within it and never jumps to another control.
+  const id = useId()
   return (
-    <div className="st-seg" role="radiogroup" aria-label={p.label}>
-      {p.options.map((o) => (
-        <button
-          key={o.value}
-          type="button"
-          role="radio"
-          aria-checked={o.value === p.value}
-          className={o.value === p.value ? 'is-active' : ''}
-          onClick={() => p.onChange(o.value)}
-        >
-          {o.icon}
-          {o.label}
-        </button>
-      ))}
-    </div>
+    <LayoutGroup id={id}>
+      <div className="st-seg" role="radiogroup" aria-label={p.label}>
+        {p.options.map((o) => (
+          <button
+            key={o.value}
+            type="button"
+            role="radio"
+            aria-checked={o.value === p.value}
+            className={o.value === p.value ? 'is-active' : ''}
+            onClick={() => p.onChange(o.value)}
+          >
+            {o.value === p.value && (
+              <motion.span
+                layoutId="thumb"
+                className="st-seg-thumb"
+                transition={{ duration: dur.slow, ease: ease.out }}
+              />
+            )}
+            <span className="st-seg-label">
+              {o.icon}
+              {o.label}
+            </span>
+          </button>
+        ))}
+      </div>
+    </LayoutGroup>
   )
 }
 

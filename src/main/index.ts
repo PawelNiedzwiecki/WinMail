@@ -6,7 +6,6 @@ import {
   Menu,
   shell,
   nativeTheme,
-  Notification,
   screen,
   type MenuItemConstructorOptions
 } from 'electron'
@@ -14,9 +13,11 @@ import { join } from 'path'
 import { release } from 'os'
 import { Store } from './store'
 import { MailService } from './mail'
+import { MailCache } from './cache'
 import { registerIpc } from './ipc'
 import { Contacts } from './contacts'
 import { Outbox } from './outbox'
+import { Notifier } from './notifications'
 import { cleanTemp } from './attachments'
 import { loadWindowState, trackWindowState } from './windowState'
 import type { MessageSummary, OpenMessageEvent } from '../shared/types'
@@ -24,20 +25,39 @@ import type { MessageSummary, OpenMessageEvent } from '../shared/types'
 const CONTACTS_SCAN_DELAY_MS = 20_000
 /** How often snoozed mail and scheduled sends are checked. */
 const TIMER_MS = 30_000
-/** More new messages than this are announced as one notification. */
-const MAX_NOTIFICATIONS = 3
 /** How long a closing window waits for the renderer to save drafts. */
 const CLOSE_TIMEOUT_MS = 10_000
 /** Quitting never takes longer than this, even with a dead network. */
 const QUIT_TIMEOUT_MS = 15_000
 const MIN_WIDTH = 900
 const MIN_HEIGHT = 560
+/** A pop-out compose window: opening size, smallest size, and the title bar the header sits under. */
+const POPOUT_WIDTH = 780
+const POPOUT_HEIGHT = 680
+const POPOUT_MIN_WIDTH = 520
+const POPOUT_MIN_HEIGHT = 420
+const POPOUT_BAR = 40
+/** Each further pop-out opens this far down and right of the last, so they don't hide each other. */
+const POPOUT_CASCADE = 28
+/** A message in a window of its own (double-click in the list). */
+const READER_WIDTH = 860
+const READER_HEIGHT = 780
+const READER_MIN_WIDTH = 480
+const READER_MIN_HEIGHT = 400
+const READER_BAR = 40
 /** A crashed page reloads at most this often before the window is left as it is. */
 const MAX_RELOADS = 3
 const RELOAD_WINDOW_MS = 60_000
 
 let mail: MailService | null = null
 let outbox: Outbox | null = null
+let cache: MailCache | null = null
+let mainWin: BrowserWindow | null = null
+/** Pop-out compose windows by web contents id, with what each was opened with. */
+const popouts = new Map<number, { win: BrowserWindow; payload: unknown }>()
+/** Message windows by web contents id, with the message each shows. */
+const readers = new Map<number, { win: BrowserWindow; summary: MessageSummary }>()
+const mainWindow = () => (mainWin && !mainWin.isDestroyed() ? mainWin : null)
 /** Windows whose renderer has saved its drafts, or can't, so they may close. */
 const mayClose = new WeakSet<BrowserWindow>()
 
@@ -98,49 +118,28 @@ function showContextMenu(win: BrowserWindow, p: Electron.ContextMenuParams): voi
   if (items.length) Menu.buildFromTemplate(items).popup({ window: win })
 }
 
-function overlay() {
+function overlay(height = 52) {
   return {
     color: '#00000000',
     symbolColor: nativeTheme.shouldUseDarkColors ? '#ffffff' : '#000000',
-    height: 52
+    height
   }
 }
 
-function createWindow(): BrowserWindow {
-  const isWin = process.platform === 'win32'
-  // Mica needs Windows 11 (build 22000+). Windows 10 gets a solid sidebar.
-  const mica = isWin && Number(release().split('.')[2] ?? 0) >= 22000
+const isWin = process.platform === 'win32'
+// Mica needs Windows 11 (build 22000+). Windows 10 gets a solid sidebar.
+const mica = isWin && Number(release().split('.')[2] ?? 0) >= 22000
 
-  // Reopen where it was last; the first time (or if that spot is gone) open large on big screens:
-  // most of the usable area, but never smaller than the old default.
-  const saved = loadWindowState(MIN_WIDTH, MIN_HEIGHT)
-  const area = screen.getPrimaryDisplay().workAreaSize
-  const width = Math.min(area.width, Math.max(1280, Math.round(area.width * 0.85)))
-  const height = Math.min(area.height, Math.max(820, Math.round(area.height * 0.9)))
+const webPreferences = () => ({
+  preload: join(__dirname, '../preload/index.js'),
+  additionalArguments: [mica ? '--winmail-mica=1' : '--winmail-mica=0'],
+  sandbox: true,
+  contextIsolation: true,
+  nodeIntegration: false
+})
 
-  const win = new BrowserWindow({
-    ...(saved ? saved.bounds : { width, height }),
-    minWidth: MIN_WIDTH,
-    minHeight: MIN_HEIGHT,
-    show: false,
-    title: 'WinMail',
-    titleBarStyle: 'hidden',
-    titleBarOverlay: isWin ? overlay() : undefined,
-    backgroundMaterial: mica ? 'mica' : undefined,
-    backgroundColor: mica ? '#00000000' : undefined,
-    webPreferences: {
-      preload: join(__dirname, '../preload/index.js'),
-      additionalArguments: [mica ? '--winmail-mica=1' : '--winmail-mica=0'],
-      sandbox: true,
-      contextIsolation: true,
-      nodeIntegration: false
-    }
-  })
-
-  if (saved?.maximized) win.maximize()
-  trackWindowState(win)
-  win.once('ready-to-show', () => win.show())
-
+/** What every window does alike: keep links out, save drafts before closing, recover from crashes. */
+function wireWindow(win: BrowserWindow, overlayHeight?: number): void {
   // Links in emails open in the default browser, never inside the app.
   win.webContents.setWindowOpenHandler(({ url }) => {
     if (/^(https?|mailto):/i.test(url)) shell.openExternal(url)
@@ -153,9 +152,11 @@ function createWindow(): BrowserWindow {
     }
   })
 
-  nativeTheme.on('updated', () => {
-    if (isWin && !win.isDestroyed()) win.setTitleBarOverlay(overlay())
-  })
+  const theme = () => {
+    if (isWin && !win.isDestroyed()) win.setTitleBarOverlay(overlay(overlayHeight))
+  }
+  nativeTheme.on('updated', theme)
+  win.on('closed', () => nativeTheme.off('updated', theme))
 
   // Let the renderer save open drafts first; it answers with app:close-ready.
   win.on('close', (e) => {
@@ -187,13 +188,162 @@ function createWindow(): BrowserWindow {
   win.webContents.on('did-finish-load', () => mayClose.delete(win))
 
   win.webContents.on('context-menu', (_e, p) => showContextMenu(win, p))
+}
 
-  if (process.env['ELECTRON_RENDERER_URL']) {
-    win.loadURL(process.env['ELECTRON_RENDERER_URL'])
-  } else {
-    win.loadFile(join(__dirname, '../renderer/index.html'))
-  }
+function loadRenderer(win: BrowserWindow, hash?: string): void {
+  const dev = process.env['ELECTRON_RENDERER_URL']
+  if (dev) win.loadURL(hash ? `${dev}#${hash}` : dev)
+  else win.loadFile(join(__dirname, '../renderer/index.html'), hash ? { hash } : undefined)
+}
+
+function createWindow(): BrowserWindow {
+
+  // Reopen where it was last; the first time (or if that spot is gone) open large on big screens:
+  // most of the usable area, but never smaller than the old default.
+  const saved = loadWindowState(MIN_WIDTH, MIN_HEIGHT)
+  const area = screen.getPrimaryDisplay().workAreaSize
+  const width = Math.min(area.width, Math.max(1280, Math.round(area.width * 0.85)))
+  const height = Math.min(area.height, Math.max(820, Math.round(area.height * 0.9)))
+
+  const win = new BrowserWindow({
+    ...(saved ? saved.bounds : { width, height }),
+    minWidth: MIN_WIDTH,
+    minHeight: MIN_HEIGHT,
+    show: false,
+    title: 'WinMail',
+    titleBarStyle: 'hidden',
+    titleBarOverlay: isWin ? overlay() : undefined,
+    backgroundMaterial: mica ? 'mica' : undefined,
+    backgroundColor: mica ? '#00000000' : undefined,
+    webPreferences: webPreferences()
+  })
+
+  if (saved?.maximized) win.maximize()
+  trackWindowState(win)
+  win.once('ready-to-show', () => win.show())
+
+  wireWindow(win)
+  // Pop-out compose and message windows belong to this one: they close with it, each saving its draft first.
+  win.on('closed', () => {
+    for (const { win: p } of [...popouts.values(), ...readers.values()]) if (!p.isDestroyed()) p.close()
+  })
+  loadRenderer(win)
   return win
+}
+
+/**
+ * A secondary window over the middle of the main one, the `index`-th a little below and right of
+ * the one before, kept on the screen.
+ */
+interface ChildSize {
+  width: number
+  height: number
+  minWidth: number
+  minHeight: number
+  /** Height of the title bar the page draws under the window buttons. */
+  bar: number
+}
+
+function childWindow(title: string, size: ChildSize, index: number): BrowserWindow {
+  const parent = mainWindow()
+  const area = screen.getDisplayMatching(parent?.getBounds() ?? screen.getPrimaryDisplay().bounds).workArea
+  const width = Math.min(size.width, area.width)
+  const height = Math.min(size.height, area.height)
+  const around = parent?.getBounds() ?? area
+  const shift = (index % 6) * POPOUT_CASCADE
+  const x = Math.round(around.x + (around.width - width) / 2 + shift)
+  const y = Math.round(around.y + (around.height - height) / 2 + shift)
+
+  return new BrowserWindow({
+    width,
+    height,
+    x: Math.max(area.x, Math.min(x, area.x + area.width - width)),
+    y: Math.max(area.y, Math.min(y, area.y + area.height - height)),
+    minWidth: Math.min(size.minWidth, width),
+    minHeight: Math.min(size.minHeight, height),
+    show: false,
+    title,
+    titleBarStyle: 'hidden',
+    titleBarOverlay: isWin ? overlay(size.bar) : undefined,
+    backgroundMaterial: mica ? 'mica' : undefined,
+    backgroundColor: mica ? '#00000000' : undefined,
+    webPreferences: webPreferences()
+  })
+}
+
+/** Opens a compose card in a window of its own, a little below and right of the last one. */
+function createPopout(payload: unknown): void {
+  const win = childWindow(
+    'New Message',
+    { width: POPOUT_WIDTH, height: POPOUT_HEIGHT, minWidth: POPOUT_MIN_WIDTH, minHeight: POPOUT_MIN_HEIGHT, bar: POPOUT_BAR },
+    popouts.size
+  )
+  const id = win.webContents.id
+  popouts.set(id, { win, payload })
+  win.on('closed', () => popouts.delete(id))
+  win.once('ready-to-show', () => win.show())
+  wireWindow(win, POPOUT_BAR)
+  loadRenderer(win, 'popout')
+}
+
+/** Opens a message in a window of its own, or brings forward the window already showing it. */
+function openReader(summary: MessageSummary): void {
+  if (!summary || typeof summary.key !== 'string' || typeof summary.accountId !== 'string') {
+    throw new Error('No message to open.')
+  }
+  for (const r of readers.values()) {
+    if (r.summary.key !== summary.key || r.win.isDestroyed()) continue
+    if (r.win.isMinimized()) r.win.restore()
+    r.win.focus()
+    return
+  }
+  const win = childWindow(
+    summary.subject || 'Message',
+    { width: READER_WIDTH, height: READER_HEIGHT, minWidth: READER_MIN_WIDTH, minHeight: READER_MIN_HEIGHT, bar: READER_BAR },
+    readers.size
+  )
+  const id = win.webContents.id
+  readers.set(id, { win, summary })
+  win.on('closed', () => readers.delete(id))
+  win.once('ready-to-show', () => win.show())
+  wireWindow(win, READER_BAR)
+  loadRenderer(win, 'message')
+}
+
+/** The compose session id inside a pop-out payload (`{ session: { id } }`), if it has one. */
+function idOf(payload: unknown): string {
+  const id = (payload as { session?: { id?: unknown } } | null)?.session?.id
+  return typeof id === 'string' ? id : ''
+}
+
+/** Pop-out windows: the main window opens them, they hand things back to it. */
+function registerPopouts(): void {
+  const answer = (fn: () => unknown) => {
+    try {
+      return { ok: true, value: fn() }
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : String(err) }
+    }
+  }
+  ipcMain.handle('popout:open', (e, payload: unknown) =>
+    answer(() => {
+      if (e.sender !== mainWindow()?.webContents) throw new Error('Pop-out windows open from the main window.')
+      createPopout(payload)
+    })
+  )
+  ipcMain.handle('popout:payload', (e) => answer(() => popouts.get(e.sender.id)?.payload ?? null))
+  ipcMain.handle('reader:open', (e, summary: MessageSummary) =>
+    answer(() => {
+      if (e.sender !== mainWindow()?.webContents) throw new Error('Message windows open from the main window.')
+      openReader(summary)
+    })
+  )
+  ipcMain.handle('reader:payload', (e) => answer(() => readers.get(e.sender.id)?.summary ?? null))
+  ipcMain.handle('popout:list', () => answer(() => [...popouts.values()].map((p) => idOf(p.payload)).filter(Boolean)))
+  // Only pop-outs and message windows speak to the main window this way; it has its own channels.
+  ipcMain.on('popout:send', (e, message: unknown) => {
+    if (popouts.has(e.sender.id) || readers.has(e.sender.id)) mainWindow()?.webContents.send('popout:message', message)
+  })
 }
 
 // A second copy would share winmail.json and the IMAP connections; focus the first instead.
@@ -201,7 +351,7 @@ if (!app.requestSingleInstanceLock()) {
   app.quit()
 } else {
   app.on('second-instance', () => {
-    const win = BrowserWindow.getAllWindows()[0]
+    const win = mainWindow()
     if (!win) return
     if (win.isMinimized()) win.restore()
     win.focus()
@@ -224,32 +374,20 @@ if (!app.requestSingleInstanceLock()) {
       for (const w of BrowserWindow.getAllWindows()) w.webContents.send(channel, payload)
     }
     const open = (e: OpenMessageEvent) => {
-      const w = BrowserWindow.getAllWindows()[0]
+      const w = mainWindow()
       if (!w) return
       if (w.isMinimized()) w.restore()
       w.show()
       w.focus()
       w.webContents.send('mail:open', e)
     }
-    const announce = (accountId: string, list: MessageSummary[]) => {
-      const focused = BrowserWindow.getAllWindows().some((w) => w.isFocused())
-      if (!store.getSettings().notifyNewMail || focused || !Notification.isSupported()) return
-      const account = store.listAccounts().find((a) => a.id === accountId)
-      if (list.length > MAX_NOTIFICATIONS) {
-        const n = new Notification({ title: `${list.length} new messages`, body: account?.description ?? '' })
-        n.on('click', () => open({ accountId, path: list[0]!.mailbox, uid: list[0]!.uid }))
-        n.show()
-        return
-      }
-      for (const m of list) {
-        const n = new Notification({ title: m.from.name || m.from.email, subtitle: m.subject, body: `${m.subject}
-${m.preview}` })
-        n.on('click', () => open({ accountId, path: m.mailbox, uid: m.uid }))
-        n.show()
-      }
-    }
+    // The notifier needs the outbox, which needs the mail service; it is set just below.
+    let notifier: Notifier | null = null
+    const announce = (accountId: string, list: MessageSummary[]) => void notifier?.announce(accountId, list)
+    const mailCache = (cache = new MailCache())
     const mailService = new MailService(
       store,
+      mailCache,
       (e) => send('mail:changed', e),
       (e) => send('mail:progress', e),
       announce
@@ -264,8 +402,17 @@ ${m.preview}` })
       (input) => contacts.recordSent(input.accountId, input.to, input.cc, input.bcc)
     )
     outbox = queue
+    notifier = new Notifier({
+      store,
+      mail: mailService,
+      outbox: queue,
+      contacts,
+      window: mainWindow,
+      open,
+      changed: (e) => send('mail:changed', e)
+    })
     setMenu()
-    registerIpc(store, mailService, contacts, queue)
+    registerIpc(store, mailService, contacts, queue, mailCache)
     ipcMain.on('app:close-ready', (e) => {
       const w = BrowserWindow.fromWebContents(e.sender)
       if (!w) return
@@ -281,9 +428,14 @@ ${m.preview}` })
     }
     setTimeout(tick, CONTACTS_SCAN_DELAY_MS)
     setInterval(tick, TIMER_MS)
-    const win = createWindow()
+    registerPopouts()
+    const win = (mainWin = createWindow())
     // Let the first mailbox load finish before scanning mail for contacts.
     setTimeout(() => void contacts.scan(), CONTACTS_SCAN_DELAY_MS)
+    setTimeout(() => {
+      mailCache.prune(store.listAccounts().map((a) => a.id))
+      mailService.trimCache()
+    }, CONTACTS_SCAN_DELAY_MS)
     if (store.recoveredFrom) {
       const backup = store.recoveredFrom
       win.once('ready-to-show', () =>
@@ -296,7 +448,7 @@ ${m.preview}` })
     }
 
     app.on('activate', () => {
-      if (BrowserWindow.getAllWindows().length === 0) createWindow()
+      if (BrowserWindow.getAllWindows().length === 0) mainWin = createWindow()
     })
   })
 }
@@ -312,7 +464,10 @@ app.on('before-quit', (e) => {
     await mail?.disconnectAll()
   })()
   const deadline = new Promise((resolve) => setTimeout(resolve, QUIT_TIMEOUT_MS))
-  void Promise.race([work, deadline]).finally(() => app.exit(0))
+  void Promise.race([work, deadline]).finally(() => {
+    cache?.close()
+    app.exit(0)
+  })
 })
 
 app.on('window-all-closed', () => {
