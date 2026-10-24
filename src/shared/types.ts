@@ -99,9 +99,16 @@ export interface MessageSummary {
   parents?: string[]
   /** Gmail's X-GM-THRID; groups conversations exactly on Google accounts. */
   threadId?: string
+  /** Inbox category worked out by WinMail from sender and headers (see shared/categorize.ts). */
+  category?: GmailCategory
+  /**
+   * The folder's UIDVALIDITY when this was listed. Sent back with anything that acts on `uid`, so a message list
+   * saved before the server renumbered the folder cannot act on a different message.
+   */
+  uidValidity?: string
 }
 
-/** Gmail inbox tabs. */
+/** Inbox category tabs: Gmail's own on Google accounts, worked out by WinMail elsewhere. */
 export type GmailCategory = 'primary' | 'social' | 'promotions' | 'updates' | 'forums'
 
 export interface AttachmentInfo {
@@ -124,6 +131,36 @@ export interface MessageDetail extends MessageSummary {
   attachments: AttachmentInfo[]
   /** From List-Unsubscribe; null when the sender offers no way out. */
   unsubscribe: Unsubscribe | null
+  /** A calendar invitation in the message, or null. Missing on messages saved before WinMail looked for them. */
+  invite?: CalendarInvite | null
+}
+
+/** An RSVP answer, as the iCalendar PARTSTAT value. */
+export type InviteAnswer = 'ACCEPTED' | 'TENTATIVE' | 'DECLINED'
+
+export interface InviteAttendee extends Address {
+  /** iCalendar PARTSTAT: NEEDS-ACTION, ACCEPTED, TENTATIVE, DECLINED, DELEGATED. */
+  status: string
+}
+
+/** An event sent by mail (iCalendar). */
+export interface CalendarInvite {
+  /** REQUEST: an invitation or update; CANCEL: called off; REPLY: a guest answered; PUBLISH: for information. */
+  method: string
+  uid: string
+  summary: string
+  /** An instant (ISO) for timed events; a date ("2026-10-27") for all-day ones, whose `end` is the day after. */
+  start: string
+  end: string | null
+  allDay: boolean
+  recurring: boolean
+  location: string | null
+  organizer: Address | null
+  attendees: InviteAttendee[]
+  /** Your answer: as the invitation has it, or the last one sent from WinMail. */
+  answer: InviteAnswer | null
+  /** You organised it: nothing to answer. */
+  isOrganizer: boolean
 }
 
 export interface Unsubscribe {
@@ -139,6 +176,8 @@ export type MoveTarget = 'trash' | 'archive' | 'junk' | 'inbox'
 export interface MoveResult {
   path: string
   uids: number[]
+  /** UIDVALIDITY of the destination, for undoing the move. */
+  uidValidity?: string
 }
 
 /** A file on disk to attach when sending. */
@@ -229,7 +268,19 @@ export type MessageAppearance = 'light' | 'dark' | 'app'
 
 export type ComposeFormat = 'rich' | 'plain'
 
+/** Row spacing in the message list. */
+export type ListDensity = 'compact' | 'comfortable'
+
+/** Which new mail gets a notification: everything, the Primary category, or people you know. */
+export type NotifyFilter = 'all' | 'primary' | 'people'
+
+/** How much of a message its notification shows. */
+export type NotifyPreview = 'full' | 'sender' | 'none'
+
 export interface Settings {
+  /** Lines of message text shown under the subject in the list; 0 shows the title only. */
+  listPreviewLines: 0 | 1 | 2 | 3
+  listDensity: ListDensity
   /** 0 = manual only */
   checkIntervalMin: number
   loadRemoteContent: boolean
@@ -238,24 +289,54 @@ export interface Settings {
   /** Seconds a sent message can still be undone; 0 sends at once. */
   undoSendSec: number
   notifyNewMail: boolean
+  notifyFilter: NotifyFilter
+  /** Accounts that never notify. */
+  notifyMutedAccounts: string[]
+  notifySound: boolean
+  notifyPreview: NotifyPreview
+  /** No notifications from `quietStart` to `quietEnd` ("HH:MM", local time; may cross midnight). */
+  quietHours: boolean
+  quietStart: string
+  quietEnd: string
+  /** Unread inbox count on the taskbar button. */
+  taskbarBadge: boolean
   /** Single-key shortcuts like Gmail's (j/k, e, #, r, c, /). */
   gmailShortcuts: boolean
   /** Group the list into conversations. */
   conversations: boolean
+  /** Show category tabs (Primary, Social, …) above the inbox. */
+  inboxCategories: boolean
+  /** Ask before moving messages to the Bin. */
+  confirmDelete: boolean
   composeFormat: ComposeFormat
+  /** Turn animations off in the app; Windows' own "Animation effects" setting also applies. */
+  reduceMotion: boolean
   templates: Template[]
 }
 
 export const DEFAULT_SETTINGS: Settings = {
+  listPreviewLines: 2,
+  listDensity: 'comfortable',
   checkIntervalMin: 5,
   loadRemoteContent: false,
   appearance: 'system',
   messageAppearance: 'light',
   undoSendSec: 10,
   notifyNewMail: true,
+  notifyFilter: 'all',
+  notifyMutedAccounts: [],
+  notifySound: true,
+  notifyPreview: 'full',
+  quietHours: false,
+  quietStart: '22:00',
+  quietEnd: '07:00',
+  taskbarBadge: true,
   gmailShortcuts: false,
   conversations: true,
+  inboxCategories: true,
+  confirmDelete: false,
   composeFormat: 'rich',
+  reduceMotion: false,
   templates: []
 }
 
@@ -268,6 +349,8 @@ export interface TestResult {
 export interface MailChangedEvent {
   accountId: string
   path: string
+  /** The folder's UIDs were renumbered: anything remembered about its messages is wrong. */
+  reset?: boolean
 }
 
 /** New messages a mailbox is downloading; `incoming: 0` once the download finishes. */
@@ -301,22 +384,27 @@ export interface WinMailApi {
   search(accountId: string, mailbox: string, query: string, limit?: number): Promise<MessageSummary[]>
   /** Every message of a Gmail conversation, from All Mail. Empty on other providers. */
   listThread(accountId: string, threadId: string): Promise<MessageSummary[]>
-  getMessage(accountId: string, mailbox: string, uid: number): Promise<MessageDetail>
+  getMessage(accountId: string, mailbox: string, uid: number, uidValidity?: string): Promise<MessageDetail>
   /** Raw RFC 822 source. */
-  getSource(accountId: string, mailbox: string, uid: number): Promise<string>
+  getSource(accountId: string, mailbox: string, uid: number, uidValidity?: string): Promise<string>
   setFlags(
     accountId: string,
     mailbox: string,
     uids: number[],
-    flags: { seen?: boolean; flagged?: boolean }
+    flags: { seen?: boolean; flagged?: boolean },
+    uidValidity?: string
   ): Promise<void>
   markAllRead(accountId: string, mailbox: string): Promise<void>
   /** Null when the messages were deleted for good or the server did not say where they went. */
-  move(accountId: string, mailbox: string, uids: number[], target: MoveTarget): Promise<MoveResult | null>
-  moveTo(accountId: string, mailbox: string, uids: number[], dest: string): Promise<MoveResult | null>
+  move(accountId: string, mailbox: string, uids: number[], target: MoveTarget, uidValidity?: string): Promise<MoveResult | null>
+  moveTo(accountId: string, mailbox: string, uids: number[], dest: string, uidValidity?: string): Promise<MoveResult | null>
   /** Moves to the Snoozed folder; back to the inbox, unread, at `until` (ISO). */
-  snooze(accountId: string, mailbox: string, uids: number[], until: string): Promise<void>
-  saveAttachment(accountId: string, mailbox: string, uid: number, index: number): Promise<string | null>
+  snooze(accountId: string, mailbox: string, uids: number[], until: string, uidValidity?: string): Promise<void>
+  saveAttachment(accountId: string, mailbox: string, uid: number, index: number, uidValidity?: string): Promise<string | null>
+  /** Answers a calendar invitation: emails the organiser an iCalendar reply. Returns the invite with your answer. */
+  answerInvite(accountId: string, mailbox: string, uid: number, answer: InviteAnswer, uidValidity?: string): Promise<CalendarInvite>
+  /** Opens a message's invitation in the default calendar app (Outlook, Calendar) to add it there. */
+  openInvite(accountId: string, mailbox: string, uid: number, uidValidity?: string): Promise<void>
   /** Save dialog for text, e.g. a message's source. */
   saveText(defaultName: string, text: string): Promise<string | null>
   /** Prints a complete HTML document. */
@@ -343,7 +431,7 @@ export interface WinMailApi {
   saveDraft(input: SendInput): Promise<number | null>
   deleteDraft(accountId: string, uid: number): Promise<void>
   /** A saved draft, attachments extracted to temporary files, ready for Compose. */
-  openDraft(accountId: string, mailbox: string, uid: number): Promise<SendInput>
+  openDraft(accountId: string, mailbox: string, uid: number, uidValidity?: string): Promise<SendInput>
   scheduleSend(input: SendInput, sendAt: string): Promise<ScheduledInfo>
   listScheduled(): Promise<ScheduledInfo[]>
   /** Removes it from the queue and returns it for editing. */
@@ -362,13 +450,55 @@ export interface WinMailApi {
   /** Fires when an account's contacts finish loading. */
   onContactsChanged(cb: (accountId: string) => void): () => void
 
+  /** Folder list as last saved on this PC; null when nothing has been saved for the account. */
+  cachedMailboxes(accountId: string): Promise<MailboxInfo[] | null>
+  /**
+   * A folder's newest messages as last saved on this PC, without asking the server; null when the folder has
+   * not been synced. `view` is a Gmail search such as `category:promotions`, saved from the last time it ran.
+   */
+  cachedList(
+    accountId: string,
+    mailbox: string,
+    limit: number,
+    view?: string
+  ): Promise<{ messages: MessageSummary[]; more: boolean } | null>
+  /** Bytes the saved mail takes on disk. */
+  cacheSize(): Promise<number>
+  /** Deletes the saved mail; it is saved again as mail is read. */
+  clearCache(): Promise<void>
+
   onMailChanged(cb: (e: MailChangedEvent) => void): () => void
   onMailProgress(cb: (e: MailProgressEvent) => void): () => void
   onOpenMessage(cb: (e: OpenMessageEvent) => void): () => void
+
+  /** Shows a sample new-mail notification with the current settings. */
+  testNotification(): Promise<void>
+  /** Draws sender pictures for notifications, as PNG data URLs; the main window answers. */
+  onNotificationAvatar(draw: (name: string, email: string) => Promise<string>): () => void
+  /** Unread count on the taskbar button: `image` is the badge as a PNG data URL, null clears it. */
+  setTaskbarBadge(count: number, image: string | null): void
 
   /** Opens the Windows emoji picker at the cursor. */
   showEmojiPanel(): void
   /** The window is about to close: save open drafts, then call `closeReady()`. */
   onCloseRequested(cb: () => void): () => void
   closeReady(): void
+
+  /**
+   * Pop-out compose windows: a card moves to a window of its own and back. The payloads belong to
+   * the renderer; the main process only carries them.
+   */
+  openComposeWindow(payload: unknown): Promise<void>
+  /** In a pop-out window: what it was opened with. */
+  popoutPayload(): Promise<unknown | null>
+  /** Ids of the pop-out windows that are open. */
+  listPopouts(): Promise<string[]>
+  /** In a pop-out window: tells the main window something, e.g. to take the card back. */
+  popoutSend(message: unknown): void
+  onPopoutMessage(cb: (message: unknown) => void): () => void
+
+  /** Opens a message in a window of its own (double-click in the list), or focuses the one showing it. */
+  openMessageWindow(summary: MessageSummary): Promise<void>
+  /** In a message window: the message it shows. */
+  messageWindowPayload(): Promise<MessageSummary | null>
 }

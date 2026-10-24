@@ -18,7 +18,8 @@ src/
   main/        Electron main process
     index.ts       Window creation, single instance, wiring, notifications, timers
     store.ts       winmail.json: accounts, settings, encrypted secrets
-    mail.ts        MailService: IMAP connections, mailboxes, messages, search, move, send, drafts
+    mail.ts        MailService: IMAP connections, mailboxes, messages, search, move, send, drafts, folder sync
+    cache.ts       MailCache: SQLite copy of folder lists and opened messages (mail-cache.db)
     google.ts      Google OAuth (PKCE, loopback), access-token cache, revoke
     contacts.ts    Contact ranking and cache (contacts.json)
     addressbook.ts Google People API and CardDAV address books
@@ -43,6 +44,7 @@ All under `%APPDATA%\winmail\`:
 | --- | --- |
 | `winmail.json` | `accounts`, `settings`, `secrets` (passwords / Google refresh tokens, encrypted with `safeStorage` = DPAPI), plus queues for snoozed and scheduled mail. Written atomically (tmp + rename); unreadable file is moved aside and the user warned. |
 | `contacts.json` | Per-account contacts from address book and mail history. |
+| `mail-cache.db` (+ `-wal`, `-shm`) | SQLite (`node:sqlite`): folder list and unread counts per account, the newest ≤ 500 messages of each folder visited (summaries and previews), bodies of messages opened (≤ 5 MB each, ≤ 250 MB in all), Gmail category tabs. Plain, unencrypted. Only a cache: a damaged or newer file is deleted and rebuilt, and it works from memory if the disk fails. Folders unopened for 60 days drop their messages. Cleared in Settings > General > Storage. See CACHE.md. |
 
 ## 4. IPC API
 
@@ -55,11 +57,13 @@ Defined in `src/shared/types.ts` (`WinMailApi`), bridged in `src/preload/index.t
 | addGoogleAccount / reauthGoogleAccount / cancelGoogleSignIn | `accounts:*Google` | Google sign-in |
 | getSettings / setSettings | `settings:*` | App settings |
 | listMailboxes | `mail:mailboxes` | Folder tree with unread counts |
+| cachedMailboxes / cachedList / cacheSize / clearCache | `mail:cachedMailboxes`, `mail:cachedList`, `mail:cacheSize`, `mail:clearCache` | The saved copy on this PC, read without a connection |
 | listMessages | `mail:messages` | Newest N summaries of a folder |
 | getMessage | `mail:message` | Full message (marks read) |
 | setFlags | `mail:flags` | Seen / flagged |
 | move | `mail:move` | Move to inbox / archive / junk / trash |
 | saveAttachment | `mail:saveAttachment` | Save dialog + write |
+| answerInvite / openInvite | `mail:answerInvite`, `mail:openInvite` | RSVP to a calendar invitation (iMIP REPLY to the organiser); open its .ics in the default calendar app |
 | send | `mail:send` | SMTP send (+ append to Sent where needed) |
 | queueSend / cancelScheduled / takeFailedSends / onOutbox | `outbox:queue`, `outbox:cancel`, `outbox:takeFailed`, event `outbox:event` | Undo send: held for `undoSendSec`, then sent; failures come back once |
 | addDroppedFiles / saveClipboardImage | `compose:addFiles`, `compose:saveImage` | Attach dropped files or a pasted image (paths are checked in main) |
@@ -77,17 +81,54 @@ New methods added by roadmap items are listed in the changelog entry that introd
 
 **Message list.** Newest 60 per folder (unified inbox merges accounts by date); "Load Older Messages" raises the limit by 60. Rows show sender, date, subject, preview, unread dot, flag, attachment clip, account label in unified view. Right-click menu: reply, reply all, forward, read/unread, flag, move to inbox, archive, Move to…, Snooze…, junk, delete. Older messages load on scroll. Optional conversation grouping with a count badge. Multi-select with Ctrl/Shift-click. Search filters loaded messages at once, then searches the server (Gmail operators on Google). Gmail inboxes have category tabs.
 
-**Reading.** HTML sanitised with DOMPurify in a sandboxed iframe; remote content blocked until allowed (or setting on). Message appearance light/dark/same as app. Plain text linkified. Attachments listed, click to save. Opening marks read (the whole conversation when grouped). More menu: Print, Show Original, Summarise (Claude key), Move to, Snooze. Mailing lists get an Unsubscribe banner.
+**Reading.** HTML sanitised with DOMPurify in a sandboxed iframe; remote content blocked until allowed (or setting on). Message appearance light/dark/same as app. Plain text linkified. Attachments listed above the body, click to save. Double-click a message in the list to open it in its own window. Opening marks read (the whole conversation when grouped). More menu: Print, Show Original, Summarise (Claude key), Move to, Snooze. Mailing lists get an Unsubscribe banner. Calendar invitations show an event card: date, time in your time zone, place, organiser and guests, Yes / Maybe / No, Add to Calendar.
 
 **Compose.** Docked cards (bottom right; minimize, full screen, several at once) and inline replies under the message. Recipient chips (To, Cc, Bcc), From when several accounts, rich text or plain text, attachments, signature, templates. Reply uses Reply-To when present; reply all drops yourself and never uses the original Bcc. Drafts autosave to the Drafts folder; Esc or Ctrl+W saves and closes; Ctrl+Enter sends after the undo delay. See COMPOSE.md.
 
-**Sync.** IMAP IDLE on INBOX pushes new mail; periodic check every 1/5/15/30/60 min or manual. "Downloading N new messages" status in the list footer.
+**Sync.** IMAP IDLE on INBOX pushes new mail; periodic check every 1/5/15/30/60 min or manual. "Downloading N new messages" status in the list footer. Folders and opened messages are saved on this PC (`mail-cache.db`): the sidebar, counts and every folder seen before show at once at startup and work offline, then are brought up to date. A refresh asks the server for its UIDs from the saved range (new and removed mail), the flags that changed (CONDSTORE `CHANGEDSINCE` where available, a full flag read otherwise) and fetches only the new messages; a non-inbox folder whose last LIST-STATUS shows no change is not opened at all. More than 200 new messages in a folder start its list again. Everything that acts on a message sends the folder's UIDVALIDITY with it and is refused if the server renumbered the folder. Mail that arrived while WinMail was closed is not announced.
 
-**Settings.** General: appearance, message content appearance, check interval, load remote content. Accounts: info, server settings, Google re-sign-in, contacts status.
+**Settings.** General: appearance, message content appearance, check interval, load remote content, Storage (size of the saved mail, Clear). Accounts: info, server settings, Google re-sign-in, contacts status.
+
+**Notifications.** Windows toasts for new inbox mail while no WinMail window is focused: sender avatar, subject and preview, inline reply (sent through the undo-send outbox), Archive and Mark as read; more than 3 at once become one summary with Mark all as read. Settings > Notifications: on/off, all mail / Primary only / people I know, per-account switches, preview (full / sender / hidden), sound, quiet hours, test button, unread count on the taskbar button. See NOTIFICATIONS.md.
 
 **Shortcuts.** Ctrl+N new, Ctrl+R reply, Ctrl+Shift+R reply all, Ctrl+Shift+F forward, Ctrl+F search, Ctrl+, settings, Del delete, Up/Down move selection (Shift extends), Ctrl+A select all, Ctrl+Enter send, Esc close. Optional Gmail keys: j/k, e, #, !, r, a, f, s, Shift+I/U, x, b, v, z, c, /.
 
 ## 6. Changelog
+
+### 2026-10-23 — Calendar invitations
+- Messages with an iCalendar part (Outlook, Google Calendar, iCloud invitations; a text/calendar alternative or an attached .ics) show an **event card** above the attachments: title, date tile, when (in your time zone, all-day and multi-day handled), place with links, organiser and guest count (hover for each guest's answer), Repeats for series. Cancellations are struck through; a guest's reply reads "Sam Patel accepted".
+- **Yes / Maybe / No** emails the organiser an iMIP REPLY (RFC 5546): `Accepted: …` with a `text/calendar; method=REPLY` part holding the event's UID, SEQUENCE, times and time zones and you as the only attendee, so the organiser's calendar records it. Sent through SMTP like other mail, with a copy in Sent. The answer is kept with the saved message.
+- **Add to Calendar** (Open in Calendar for cancellations and replies) writes the .ics to a temporary file and opens it in the default calendar app, which adds, updates or removes the event.
+- The inline text/calendar part no longer shows as an unnamed attachment.
+- New: `main/calendar.ts` (`parseInvite`, `buildReply`, using `ical.js` for Outlook's own time zone definitions), `components/InviteCard.tsx`, `MessageDetail.invite`, `CalendarInvite` / `InviteAnswer` types, `mail.answerInvite` / `inviteFile`; `send()` takes an optional calendar part. Messages saved locally before this are fetched once more if they carry an invitation (the saved copy is used offline).
+- Checked: parser and reply tests (Outlook VTIMEZONE in winter and summer time, UTC, all-day, recurring, cancel, bad input, reply round-trip, UTC DTSTAMP); the MIME nodemailer builds; mock mode UI in light, dark and a narrow window. Not checked against a real organiser's calendar.
+
+### 2026-10-21 — Mail saved on this PC and incremental sync (details, decisions and checklist in CACHE.md)
+- **Saved copy:** new `main/cache.ts` (`MailCache`, `node:sqlite`, no native module) writes the folder list, each visited folder's newest messages and the bodies of opened messages to `%APPDATA%\winmail\mail-cache.db`. Startup seeds the sidebar and counts from it; the first visit to a folder paints from it with no skeleton and then updates quietly; opened messages and Gmail category tabs work offline. All Inboxes keeps an unreachable account's rows.
+- **Incremental sync:** `listMessages` fetches only new messages, removes expunged ones, re-reads only changed flags, and can skip a non-inbox folder entirely when LIST-STATUS shows no change. A refused SEARCH never empties the window; rows the server volunteers are ignored.
+- **Safety:** `uidValidity` travels with every message and with every call that acts on one (`getMessage`, `getSource`, `setFlags`, `move`, `moveTo`, `snooze`, `saveAttachment`, `openDraft`); a renumbered folder refuses the call, wipes its saved copy and emits `mail:changed { reset: true }`. Draft UIDs are remembered with their validity in main. `setFlags` and trash delete now fail when the server refuses (imapflow returns false).
+- **Upkeep:** newest 500 messages per folder, 60-day idle folders dropped, 250 MB of bodies (oldest opened first); account removal or a changed IMAP host/port/user clears an account. Settings > General > Storage shows the size and has Clear.
+- New API methods (with mocks; `?nocache` and `?offline` in mock mode): `cachedMailboxes`, `cachedList`, `cacheSize`, `clearCache`; optional trailing `uidValidity` on the calls above; `MessageSummary.uidValidity`, `MoveResult.uidValidity`, `MailChangedEvent.reset`.
+- Checked with a fake IMAP server driving the real `listMessages` (first visit, no-change refresh downloads nothing, new/flagged/expunged mail, refused search, volunteered rows, load more, 300-message burst, no CONDSTORE, UIDVALIDITY change, skip-without-select), cache unit scripts (write-through, recovery, trim) and the mock UI (instant paint, offline). Not checked with a real account: Gmail and non-Gmail sync, relaunch offline, the renumbered-folder refusal.
+
+### 2026-10-21 — Message windows, attachments on top, reading pane scrolls again
+- **Fix:** the reading pane didn't scroll. The toolbar refactor put `MessageView` in the column-flex `.reader`, and `.viewer` had no `min-height: 0`, so it grew to the message's height and was clipped. Checked in mock mode: before, the pane was taller than its space with no scroll; after, it scrolls, also with the wheel over an HTML body.
+- **Double-click a message** in the list to open it in a window of its own (drafts still open in compose). The same message again brings its window forward; message windows close with the main window. Reply, Reply All and Forward there open a compose window via the main window (`PopoutMessage` `reply`, `replyInWindow` in `compose/actions.ts`; `reply()` takes a `host`). The More menu has Print.
+- **Attachments** are listed above the message body instead of below it.
+- New: `components/MessageWindow.tsx` (page `#message`), `openReader` / `childWindow` in `main/index.ts` (pop-outs share `childWindow`). API: `openMessageWindow` (`reader:open`, main window only), `messageWindowPayload` (`reader:payload`); message windows may use `popoutSend`.
+- Checked in Electron with Playwright: the window opens with the message, de-duplicates, closes at once and with the main window. Not checked with a real account: loading a real message, replying from the window.
+
+### 2026-10-21 — Notifications redesign (details in NOTIFICATIONS.md)
+- New `main/notifications.ts` (`Notifier`) replaces the inline `announce` in `index.ts`: avatar drawn by the renderer (`notifyArt.ts`), inline reply via `Outbox.queue`, Archive / Mark as read buttons, summary toast, account headers when several accounts are on.
+- Settings: `notifyFilter`, `notifyMutedAccounts`, `notifySound`, `notifyPreview`, `quietHours` / `quietStart` / `quietEnd`, `taskbarBadge`; new Settings > Notifications page (the switch left General). `Contacts.isKnown()` backs "People I know".
+- API: `testNotification`, `onNotificationAvatar`, `setTaskbarBadge`. Shared helpers `quietHours.ts`, `subject.ts`.
+
+### 2026-10-20 — Inbox categories for every account, optional
+- Setting `inboxCategories` (default on), in Settings → General → Message list. Off hides the tabs and clears any active category filter.
+- Tabs now show on every account's inbox and on All inboxes, with a segmented-control design and icons; inactive tabs collapse to icons when the list is narrow.
+- Google accounts still use Gmail's own sorting (`category:` search). Other accounts are sorted by WinMail: `shared/categorize.ts` looks at the sender domain and address, subject, and the List-Id, List-Unsubscribe, Precedence and Auto-Submitted headers (fetched with the list in `fetchSummaries`; `MessageSummary.category`). It is a heuristic and errs towards Primary. The category filter applies to the messages already loaded, so use Load more to dig further.
+- Each tab has its own colour (icon tint, fill when active). Switching tab, folder or account shows skeleton rows (`ListSkeleton` in `MessageList.tsx`, `listSwitching` in `App.tsx`) instead of the old rows vanishing and returning; the sidebar folder list shows skeleton lines while mailboxes load.
+- Not yet checked in the running app or with real non-Google accounts.
 
 ### 2026-10-20 — Settings redesign
 - Settings window rebuilt: navigation on the left (General, Composing, Shortcuts, Claude, Accounts), cards of settings with a title and description on the left and a control on the right, switches instead of checkboxes, segmented choices for theme and format, a shortcuts reference, and account details in cards with a Save bar pinned to the bottom. Same settings and behaviour as before.
@@ -142,6 +183,7 @@ Status: `[x]` done, `[ ]` planned. *Gmail-only* items only apply to Google accou
 - [x] Load more on scroll
 - [x] Compose: Bcc, attachments (picker + drag and drop), drafts autosave and reopen
 - [x] Desktop notifications for new mail
+- [x] Mail saved on this PC: offline reading, instant startup, incremental sync
 
 ### Tier 2 — productivity
 - [x] Multi-select and bulk actions
@@ -165,3 +207,10 @@ Status: `[x]` done, `[ ]` planned. *Gmail-only* items only apply to Google accou
 - Confidential mode, Chat/Meet/Spaces: Google services, not mail.
 - Server-side filters UI and vacation responder: need the Gmail API or per-provider Sieve.
 - Outlook: needs Microsoft OAuth (tracked separately).
+- ~~double click should open the mail in new window~~ done 2026-10-21
+- ~~mails are not scrollable~~ fixed 2026-10-21
+- labels in mails
+- integrating AI to summarise mails or search specific criteria
+- ~~picking up attachments at the top of the mail~~ done 2026-10-21
+- ~~picking up any additional events etc.~~ calendar invitations done 2026-10-23
+- ~~redesign notifications~~ done 2026-10-21 (NOTIFICATIONS.md)

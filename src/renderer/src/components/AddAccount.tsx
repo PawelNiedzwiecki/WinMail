@@ -1,8 +1,9 @@
+import { motion } from 'motion/react'
 import { useRef, useState } from 'react'
 import { providers, getProvider } from '@shared/providers'
 import type { Account, AccountInput, ProviderId, ServerConfig } from '@shared/types'
 import { api } from '../api'
-import { useEscape } from '../useEscape'
+import { Backdrop, panelExit, useModalEscape } from './Backdrop'
 import { Row, ServerFields, guessServers } from './forms'
 import { ProviderLogo } from './ProviderLogo'
 
@@ -30,7 +31,7 @@ export function AddAccount({ existing, onClose, onAdded }: Props) {
   const [usePassword, setUsePassword] = useState(false)
   const cancelled = useRef(false)
 
-  useEscape(() => !busy && onClose())
+  useModalEscape(() => !busy && onClose())
 
   const isOther = providerId === 'other'
   const oauth = !!provider.oauth && !usePassword
@@ -111,8 +112,9 @@ export function AddAccount({ existing, onClose, onAdded }: Props) {
   }
 
   return (
-    <div className="modal-backdrop" onMouseDown={() => !busy && onClose()}>
-      <div
+    <Backdrop onMouseDown={() => !busy && onClose()}>
+      <motion.div
+        {...panelExit}
         className="sheet"
         role="dialog"
         aria-label="Add Account"
@@ -277,7 +279,7 @@ export function AddAccount({ existing, onClose, onAdded }: Props) {
             </div>
           </>
         )}
-      </div>
-    </div>
+      </motion.div>
+    </Backdrop>
   )
 }

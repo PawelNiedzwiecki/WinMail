@@ -1,6 +1,8 @@
 import { Check, ChevronsUpDown } from 'lucide-react'
+import { AnimatePresence, motion } from 'motion/react'
 import { useEffect, useId, useLayoutEffect, useRef, useState, type KeyboardEvent } from 'react'
 import { createPortal } from 'react-dom'
+import { exitTransition } from '../motion'
 import { useEscape } from '../useEscape'
 
 export interface SelectOption<T extends string> {
@@ -57,9 +59,10 @@ export function Select<T extends string>(p: Props<T>) {
     close()
   }
 
-  // Place below the button, or above it when there isn't room.
+  // Place below the button, or above it when there isn't room. The last position is kept
+  // after closing so the list fades out where it was.
   useLayoutEffect(() => {
-    if (!open) return setPos(null)
+    if (!open) return
     const b = buttonRef.current!.getBoundingClientRect()
     const height = listRef.current?.scrollHeight ?? 0
     const below = window.innerHeight - b.bottom - GAP - EDGE
@@ -157,33 +160,40 @@ export function Select<T extends string>(p: Props<T>) {
         <span className="select-value">{selected?.label}</span>
         <ChevronsUpDown size={13} className="select-chevron" />
       </button>
-      {open &&
-        createPortal(
-          <ul
-            ref={listRef}
-            id={id}
-            role="listbox"
-            className="select-list"
-            style={pos ?? { visibility: 'hidden', left: 0, top: 0 }}
-          >
-            {p.options.map((o, i) => (
-              <li
-                key={o.value}
-                id={`${id}-${i}`}
-                role="option"
-                aria-selected={o.value === p.value}
-                className={i === active ? 'is-active' : ''}
-                onMouseEnter={() => setActive(i)}
-                onMouseDown={(e) => e.preventDefault()} // keep focus on the button
-                onClick={() => choose(i)}
-              >
-                <span className="select-check">{o.value === p.value && <Check size={13} />}</span>
-                {o.label}
-              </li>
-            ))}
-          </ul>,
-          document.body
-        )}
+      {createPortal(
+        <AnimatePresence>
+          {open && (
+            <motion.ul
+              ref={listRef}
+              id={id}
+              role="listbox"
+              className="select-list"
+              style={pos ?? { visibility: 'hidden', left: 0, top: 0 }}
+              // The CSS keyframe plays the entrance; this adds a quick fade on close.
+              initial={false}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0, transition: exitTransition }}
+            >
+              {p.options.map((o, i) => (
+                <li
+                  key={o.value}
+                  id={`${id}-${i}`}
+                  role="option"
+                  aria-selected={o.value === p.value}
+                  className={i === active ? 'is-active' : ''}
+                  onMouseEnter={() => setActive(i)}
+                  onMouseDown={(e) => e.preventDefault()} // keep focus on the button
+                  onClick={() => choose(i)}
+                >
+                  <span className="select-check">{o.value === p.value && <Check size={13} />}</span>
+                  {o.label}
+                </li>
+              ))}
+            </motion.ul>
+          )}
+        </AnimatePresence>,
+        document.body
+      )}
     </>
   )
 }

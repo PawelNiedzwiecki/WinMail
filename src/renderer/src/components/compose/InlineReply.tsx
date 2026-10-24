@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from 'react'
 import { canReplyAll, close, popOut, switchReplyMode } from '../../compose/actions'
 import { useSession, type ReplyMode } from '../../compose/sessions'
 import { initials } from '../../format'
+import { reduceMotionNow } from '../../motion'
 import { useComposeCtx } from '../../compose/ComposeContext'
 import { ContextMenu, type MenuItem } from '../ContextMenu'
 import { ComposeForm } from './ComposeForm'
@@ -18,8 +19,7 @@ export function InlineReply({ id }: { id: string }) {
 
   // Bring it into view when it opens, without animation for people who asked for none.
   useEffect(() => {
-    const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches
-    root.current?.scrollIntoView({ block: 'nearest', behavior: reduced ? 'auto' : 'smooth' })
+    root.current?.scrollIntoView({ block: 'nearest', behavior: reduceMotionNow() ? 'auto' : 'smooth' })
   }, [])
 
   if (!s?.reply) return null

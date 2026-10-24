@@ -1,4 +1,13 @@
-import type { Account, MessageDetail, MessageSummary, SendInput, Settings, SpecialUse } from '@shared/types'
+import type {
+  Account,
+  MessageDetail,
+  MessageSummary,
+  QueuedSend,
+  ScheduledInfo,
+  SendInput,
+  Settings,
+  SpecialUse
+} from '@shared/types'
 import { api } from '../api'
 import { dismiss, toast } from '../toasts'
 import { parseList } from './addresses'
@@ -9,6 +18,7 @@ import { insertHtml, insertText } from './editorCommands'
 import { commitTyping, toInput } from './input'
 import { htmlToPlain } from './outgoing'
 import { forwardBlock, isForwardBlock, replyQuote, replyRecipients, splitDraft, subjectFor } from './quote'
+import { IS_POPOUT, type PopoutMessage, type PopoutPayload } from './popout'
 import { formatWhen } from './schedule'
 import { sanitizeHtml, textToHtml } from './sanitize'
 import {
@@ -201,6 +211,12 @@ export async function discard(id: string): Promise<void> {
   autosave.forget(id)
   if (uid) api.deleteDraft(s.accountId, uid).catch((e) => toast({ text: `Couldn't delete the draft: ${errText(e)}`, tone: 'error' }))
   if (!s.dirty && !uid) return
+  // A pop-out closes with its card, so the main window shows the toast.
+  if (IS_POPOUT) tell({ type: 'discarded', session: s })
+  else discardedToast(s)
+}
+
+function discardedToast(s: ComposeSession): void {
   toast({
     text: 'Draft discarded',
     duration: 8000,
@@ -398,7 +414,8 @@ export async function reply(
   mode: ReplyMode,
   summary: MessageSummary,
   detail: MessageDetail | null,
-  allowRemote: boolean
+  allowRemote: boolean,
+  host: ComposeSession['host'] = REPLY_HOST
 ): Promise<string | null> {
   const existing = allSessions().find((s) => s.reply?.key === summary.key && !s.hidden)
   if (existing) {
@@ -408,16 +425,16 @@ export async function reply(
     return existing.id
   }
   // Leave any other inline reply first: there is one slot under the message.
-  for (const o of allSessions()) if (o.host === 'inline' && !o.hidden) leaveInline(o.id)
+  if (host === 'inline') for (const o of allSessions()) if (o.host === 'inline' && !o.hidden) leaveInline(o.id)
 
-  const src = detail ?? (await api.getMessage(summary.accountId, summary.mailbox, summary.uid).catch(() => null))
+  const src = detail ?? (await api.getMessage(summary.accountId, summary.mailbox, summary.uid, summary.uidValidity).catch(() => null))
   const accountId = env.accounts.some((a) => a.id === summary.accountId) ? summary.accountId : env.defaultAccountId()
   if (!accountId) return null
   const parts = replyParts(mode, summary, src, allowRemote)
   const plain = env.settings.composeFormat === 'plain'
   const start = startBody(accountId, plain, false)
   const s = blank(accountId, {
-    host: REPLY_HOST,
+    host,
     to: parts.to,
     cc: parts.cc,
     showCc: parts.showCc,
@@ -449,7 +466,7 @@ async function attachOriginals(id: string, summary: MessageSummary): Promise<voi
   }
   updateSession(id, (s) => ({ attachments: [...s.attachments, placeholder] }))
   try {
-    const original = await api.openDraft(summary.accountId, summary.mailbox, summary.uid)
+    const original = await api.openDraft(summary.accountId, summary.mailbox, summary.uid, summary.uidValidity)
     const files = (original.attachments ?? []).map((a) => ({ ...a, id: attachmentId(), fromOriginal: true }))
     updateSession(id, (s) => ({ attachments: [...s.attachments.filter((a) => a.id !== placeholder.id), ...files] }))
   } catch (e) {
@@ -552,7 +569,7 @@ export async function openFromDrafts(m: MessageSummary): Promise<void> {
     return
   }
   try {
-    const s = fromInput(await api.openDraft(m.accountId, m.mailbox, m.uid), {})
+    const s = fromInput(await api.openDraft(m.accountId, m.mailbox, m.uid, m.uidValidity), {})
     putSession(s)
     activate(s.id)
   } catch (e) {
@@ -568,8 +585,10 @@ export function openInput(input: SendInput, dirty = true): void {
 }
 
 /** Brings back drafts a crash or an offline close left behind, minimized. */
-export function restoreRecovered(): void {
-  const list = autosave.takeRecovered()
+export async function restoreRecovered(): Promise<void> {
+  // Pop-outs still open keep their own copies.
+  const live = await api.listPopouts().catch(() => [])
+  const list = autosave.takeRecovered(live)
   for (const r of list) {
     if (getSession(r.id)) continue
     const accountId = env.accounts.some((a) => a.id === r.accountId) ? r.accountId : env.defaultAccountId()
@@ -661,14 +680,14 @@ export async function send(id: string, skip: Confirm['kind'][] = []): Promise<vo
     env.focusList()
     try {
       const q = await api.queueSend(input)
-      const undoable = Date.parse(q.sendAt) - Date.now() > 500
-      const toastId = toast({
-        text: 'Sending…',
-        busy: true,
-        duration: 0,
-        actions: undoable ? [{ label: 'Undo', run: () => void undoSend(q.id) }] : []
-      })
-      queued.set(q.id, { sessionId: id, toastId, accountId: s.accountId })
+      if (IS_POPOUT) {
+        // The main window keeps the Undo toast and the sent notice; this window is done.
+        tell({ type: 'queued', queued: q, accountId: s.accountId })
+        autosave.forget(id)
+        removeSession(id)
+        return
+      }
+      trackQueued(q, id, s.accountId)
       autosave.writeRecoveryNow()
     } catch (e) {
       updateSession(id, { hidden: undefined, banner: { tone: 'error', text: errText(e) } })
@@ -676,6 +695,18 @@ export async function send(id: string, skip: Confirm['kind'][] = []): Promise<vo
   } finally {
     sendingNow.delete(id)
   }
+}
+
+/** The "Sending…" toast with Undo, and the link from the outbox item to its card (none for a pop-out's). */
+function trackQueued(q: QueuedSend, sessionId: string, accountId: string): void {
+  const undoable = Date.parse(q.sendAt) - Date.now() > 500
+  const toastId = toast({
+    text: 'Sending…',
+    busy: true,
+    duration: 0,
+    actions: undoable ? [{ label: 'Undo', run: () => void undoSend(q.id) }] : []
+  })
+  queued.set(q.id, { sessionId, toastId, accountId })
 }
 
 /** Puts a card back after Undo or a failed send: inline if its message is still open, else docked. */
@@ -773,27 +804,32 @@ export async function schedule(id: string, at: Date): Promise<void> {
     removeSession(id)
     env.focusList()
     if (uid) api.deleteDraft(current.accountId, uid).catch((e) => console.error('Could not delete draft:', e))
-    toast({
-      text: `Send scheduled for ${formatWhen(at)}`,
-      actions: [
-        {
-          label: 'Undo',
-          run: async () => {
-            try {
-              const s2 = fromInput(await api.cancelScheduled(info.id), { dirty: true, reply: current.reply, host: current.host })
-              putSession(s2)
-              bringBack(s2.id, {})
-              autosave.touch(s2.id)
-            } catch (e) {
-              toast({ text: errText(e), tone: 'error' })
-            }
-          }
-        }
-      ]
-    })
+    if (IS_POPOUT) tell({ type: 'scheduled', info, at: at.toISOString(), reply: current.reply })
+    else scheduledToast(info, at, current.reply)
   } catch (e) {
     updateSession(id, { banner: { tone: 'error', text: errText(e) } })
   }
+}
+
+function scheduledToast(info: ScheduledInfo, at: Date, reply: ComposeSession['reply']): void {
+  toast({
+    text: `Send scheduled for ${formatWhen(at)}`,
+    actions: [
+      {
+        label: 'Undo',
+        run: async () => {
+          try {
+            const s2 = fromInput(await api.cancelScheduled(info.id), { dirty: true, reply, host: 'docked' })
+            putSession(s2)
+            bringBack(s2.id, {})
+            autosave.touch(s2.id)
+          } catch (e) {
+            toast({ text: errText(e), tone: 'error' })
+          }
+        }
+      }
+    ]
+  })
 }
 
 /** Answers the question bar: OK continues what asked, the second button does its own thing. */
@@ -879,4 +915,106 @@ export function focusList(): void {
 export function stash(): void {
   for (const s of allSessions()) flush(s.id)
   autosave.writeRecoveryNow()
+}
+
+// ---------- Pop-out windows ----------
+
+const tell = (m: PopoutMessage) => api.popoutSend(m)
+
+/** The card as the other window needs it: saved to the server first, with the latest draft UID. */
+async function handoff(id: string): Promise<{ session: ComposeSession; unsaved: boolean } | null> {
+  flush(id)
+  if (!commitTyping(id)) return null
+  autosave.cancel(id)
+  await autosave.settle(id)
+  const s = getSession(id)
+  if (!s || s.hidden) return null
+  return {
+    session: {
+      ...s,
+      host: 'docked',
+      minimized: false,
+      expanded: false,
+      confirm: undefined,
+      banner: undefined,
+      draftUid: autosave.lastUid(id) ?? s.draftUid
+    },
+    unsaved: autosave.hasUnsaved(id)
+  }
+}
+
+/** Opens the card in a window of its own. The card leaves the dock once the window exists. */
+export async function openInWindow(id: string): Promise<void> {
+  const out = await handoff(id)
+  if (!out) return
+  const payload: PopoutPayload = out
+  updateSession(id, { hidden: 'closing' })
+  try {
+    await api.openComposeWindow(payload)
+  } catch (e) {
+    updateSession(id, { hidden: undefined })
+    if (autosave.hasUnsaved(id)) autosave.touch(id)
+    toast({ text: errText(e), tone: 'error' })
+    return
+  }
+  autosave.forget(id)
+  removeSession(id)
+  env.focusList()
+}
+
+/** Pop-out window: the card goes back to the main window's dock; this window closes with it. */
+export async function returnToMain(id: string): Promise<void> {
+  const out = await handoff(id)
+  if (!out) return
+  tell({ type: 'adopt', ...out })
+  autosave.forget(id)
+  removeSession(id)
+}
+
+/** The card a pop-out window opened with, or the newer copy a crash left in its recovery storage. */
+export function startPopout(p: PopoutPayload): string {
+  autosave.useWindowRecovery(p.session.id)
+  const recovered = autosave.takeRecovered().find((r) => r.id === p.session.id)
+  const { savedAt: _savedAt, ...rest } = recovered ?? { savedAt: 0 }
+  putSession({ ...p.session, ...rest, dirty: p.session.dirty || !!recovered, minimized: false, activeAt: Date.now() })
+  if (recovered || p.unsaved) autosave.touch(p.session.id)
+  return p.session.id
+}
+
+/** Main window: a card comes back from a pop-out. */
+function adoptSession(s: ComposeSession, unsaved: boolean): void {
+  if (getSession(s.id)) return
+  putSession({ ...s, hidden: undefined, activeAt: Date.now() })
+  activate(s.id)
+  if (unsaved) autosave.touch(s.id)
+}
+
+/** Main window: listens to its pop-outs; App starts this once. */
+export function startPopoutEvents(): () => void {
+  return api.onPopoutMessage((raw) => {
+    const m = raw as PopoutMessage
+    if (m.type === 'adopt') adoptSession(m.session, m.unsaved)
+    else if (m.type === 'queued') trackQueued(m.queued, '', m.accountId)
+    else if (m.type === 'scheduled') scheduledToast(m.info, new Date(m.at), m.reply)
+    else if (m.type === 'discarded') discardedToast(m.session)
+    else if (m.type === 'settings') env.setSettings(m.settings)
+    else if (m.type === 'reply') void replyInWindow(m)
+  })
+}
+
+/**
+ * Main window: a message window asked for a reply. It opens in a compose window of its own, next to
+ * the message; a reply already being written in the dock is brought forward instead.
+ */
+async function replyInWindow(m: Extract<PopoutMessage, { type: 'reply' }>): Promise<void> {
+  const open = allSessions().some((s) => s.reply?.key === m.summary.key && !s.hidden)
+  const id = await reply(m.mode, m.summary, m.detail, m.allowRemote, 'docked')
+  if (id && !open) await openInWindow(id)
+}
+
+/** Pop-out window: the settings with new templates, merged into what is saved so other changes survive. */
+export async function saveTemplatesFromPopout(templates: Settings['templates']): Promise<Settings> {
+  const saved = await api.setSettings({ ...(await api.getSettings()), templates })
+  tell({ type: 'settings', settings: saved })
+  return saved
 }

@@ -5,6 +5,7 @@ import { chipLabel, type Chip } from '../../compose/addresses'
 import { updateSession, type ComposeSession, type RecipientField as Field } from '../../compose/sessions'
 import * as autosave from '../../compose/autosave'
 import { changeFrom } from '../../compose/actions'
+import { Collapse } from '../Collapse'
 import { Select } from '../Select'
 import { RecipientField } from './RecipientField'
 
@@ -155,8 +156,8 @@ export function RecipientsBlock({ session: s, accounts, controls }: Props) {
         </div>
       )}
       {row('to')}
-      {s.showCc && row('cc')}
-      {s.showBcc && row('bcc')}
+      <Collapse open={s.showCc}>{row('cc')}</Collapse>
+      <Collapse open={s.showBcc}>{row('bcc')}</Collapse>
     </div>
   )
 }

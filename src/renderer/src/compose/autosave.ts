@@ -97,7 +97,8 @@ export function resetServerCopy(id: string): void {
 export function forget(id: string): void {
   cancel(id)
   states.delete(id)
-  scheduleRecovery()
+  // Written now: a pop-out window closes right after, before a timer would fire.
+  writeRecoveryNow()
 }
 
 /** Edits since the last good save, i.e. what only this window has. */
@@ -147,6 +148,16 @@ async function save(id: string): Promise<boolean> {
 // ---------- Local recovery copy ----------
 
 const RECOVERY_KEY = 'winmail.compose.recovery'
+/** A pop-out window keeps its own copy, so it and the main window never overwrite each other's. */
+const POPOUT_KEY = `${RECOVERY_KEY}.popout.`
+let recoveryKey = RECOVERY_KEY
+let popout = false
+
+/** This window is a pop-out for the card `id`. */
+export function useWindowRecovery(id: string): void {
+  recoveryKey = POPOUT_KEY + id
+  popout = true
+}
 const RECOVERY_MAX_AGE_MS = 7 * 24 * 60 * 60_000
 /** Bodies bigger than this (pasted images) are kept as plain text only. */
 const RECOVERY_MAX_BODY = 2 * 1024 * 1024
@@ -214,20 +225,33 @@ export function writeRecoveryNow(): void {
     .filter((s) => s.dirty && s.hidden !== 'sending' && hasUnsaved(s.id))
     .map(toRecovered)
   try {
-    if (list.length) localStorage.setItem(RECOVERY_KEY, JSON.stringify(list))
-    else localStorage.removeItem(RECOVERY_KEY)
+    if (list.length) localStorage.setItem(recoveryKey, JSON.stringify(list))
+    else localStorage.removeItem(recoveryKey)
   } catch {
     // Storage full or blocked: the server copy is all there is.
   }
 }
 
-/** Drafts left by a crash or an offline close, newest first; each is returned once. */
-export function takeRecovered(): Recovered[] {
+/**
+ * Drafts left by a crash or an offline close, newest first; each is returned once. The main window
+ * also takes those of pop-outs that are gone (`live` lists the ones still open); a pop-out only its own.
+ */
+export function takeRecovered(live: string[] = []): Recovered[] {
   try {
-    const raw = localStorage.getItem(RECOVERY_KEY)
-    localStorage.removeItem(RECOVERY_KEY)
-    const list = raw ? (JSON.parse(raw) as Recovered[]) : []
-    return list.filter((r) => Date.now() - r.savedAt < RECOVERY_MAX_AGE_MS).sort((a, b) => b.savedAt - a.savedAt)
+    const keys = [recoveryKey]
+    if (!popout) {
+      for (let i = 0; i < localStorage.length; i++) {
+        const k = localStorage.key(i)
+        if (k?.startsWith(POPOUT_KEY) && !live.includes(k.slice(POPOUT_KEY.length))) keys.push(k)
+      }
+    }
+    const all: Recovered[] = []
+    for (const k of keys) {
+      const raw = localStorage.getItem(k)
+      localStorage.removeItem(k)
+      if (raw) all.push(...(JSON.parse(raw) as Recovered[]))
+    }
+    return all.filter((r) => Date.now() - r.savedAt < RECOVERY_MAX_AGE_MS).sort((a, b) => b.savedAt - a.savedAt)
   } catch {
     return []
   }

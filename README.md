@@ -7,10 +7,10 @@ Apple Mail-style email client for Windows. Electron + React + TypeScript.
 Requires Node 18+ (Node 22 LTS recommended).
 
 ```bash
-npm install
-npm run dev        # dev mode with hot reload
-npm run build      # production build into out/
-npm run dist:win   # Windows installer into dist/ (run on Windows)
+yarn install
+yarn dev        # dev mode with hot reload
+yarn build      # production build into out/
+yarn dist:win   # Windows installer into dist/ (run on Windows)
 ```
 
 Open `out/renderer/index.html` through a local server in a plain browser to get a mock mode with fake accounts (`?empty` starts with none).
@@ -39,7 +39,7 @@ Sign in with Google needs your own OAuth client:
 3. **Audience**: choose External. While the app is in Testing, add your Gmail addresses as test users.
 4. **Data Access**: add the scopes `https://mail.google.com/`, `.../auth/contacts.readonly` and `.../auth/contacts.other.readonly`.
 5. **Clients > Create client**: type **Desktop app**. Copy the client ID and secret.
-6. Copy `.env.example` to `.env.local`, fill in both values, then `npm run dev` or rebuild.
+6. Copy `.env.example` to `.env.local`, fill in both values, then `yarn dev` or rebuild.
 
 WinMail opens Google in your default browser and receives the answer on `http://127.0.0.1:<random port>` (PKCE). IMAP and SMTP then log in with XOAUTH2.
 
@@ -59,6 +59,7 @@ Existing app-password Google accounts can switch with **Sign in with Google…**
 - Undo send (Settings > General), Schedule send from the Send arrow, and an optional "Suggest a reply" with your Claude API key
 - SMTP sending with the From account picker; copy saved to Sent where the server doesn't do it
 - Recipient autocomplete in To and Cc from the From account's address book (Google Contacts with Google sign-in, iCloud and Fastmail over CardDAV with the app password) plus people in its Sent mail and Inbox; cached in `%APPDATA%\winmail\contacts.json`, status in Settings > Accounts
+- Mail is saved on this PC (`%APPDATA%\winmail\mail-cache.db`, not encrypted, size and Clear in Settings > General > Storage): folders you have opened and messages you have read show at once at startup and work offline, and a refresh downloads only what is new, removed or flagged instead of the whole list
 - Undo for archive, delete, junk and moves; Move to any folder; Snooze (the message comes back to the Inbox, unread)
 - Select several messages (Ctrl-click, Shift-click, Ctrl+A) and act on them at once
 - Conversation view (Settings > General): replies grouped with a count, earlier messages shown above the newest; Gmail includes your Sent replies
@@ -125,7 +126,8 @@ src/
   shared/     Types and provider presets used by both processes
   main/       Electron main process
     store.ts  Accounts, settings, encrypted passwords
-    mail.ts   IMAP (imapflow) and SMTP (nodemailer), drafts on a second IMAP connection
+    mail.ts   IMAP (imapflow) and SMTP (nodemailer), drafts on a second IMAP connection, incremental folder sync
+    cache.ts  SQLite copy of folder lists and opened messages (node:sqlite), see CACHE.md
     outbox.ts Undo-send queue and scheduled mail
     attachments.ts  Which files the page may attach; temporary files for pasted images
     google.ts Google OAuth sign-in and access tokens
@@ -148,5 +150,4 @@ src/
 ## Next steps
 
 1. OAuth2 for Microsoft (enables Outlook)
-2. Local SQLite cache for offline reading and instant startup
-3. Check the Gmail features against real accounts (see SPEC.md changelog)
+2. Check the Gmail features against real accounts (see SPEC.md changelog)
