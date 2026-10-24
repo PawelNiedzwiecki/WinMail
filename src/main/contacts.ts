@@ -29,6 +29,8 @@ interface AccountContacts {
   bookSaved: number
   bookSource: string | null
   bookError: string | null
+  /** Lower-case addresses of saved contacts and people you've written to. */
+  known?: string[]
 }
 
 interface ContactsFile {
@@ -104,6 +106,11 @@ export class Contacts {
     }
   }
 
+  /** A saved contact or someone you've written to, as opposed to anyone who has mailed you. */
+  isKnown(accountId: string, email: string): boolean {
+    return this.accounts[accountId]?.known?.includes(email.toLowerCase()) ?? false
+  }
+
   /** Reads the account again, e.g. after signing in with new permissions. */
   rescan(accountId: string): void {
     this.scanned.delete(accountId)
@@ -134,9 +141,11 @@ export class Contacts {
       this.mail.credentials(acc.id).then((creds) => fetchAddressBook(acc, creds))
     ])
 
+    const known = new Set(c.known)
     if (mail.status === 'fulfilled') {
       const entries = new Map<string, Entry>()
       add(entries, mail.value.sent, SENT_WEIGHT)
+      for (const a of mail.value.sent) known.add(a.email.trim().toLowerCase())
       add(entries, mail.value.received, RECEIVED_WEIGHT)
       c.mail = [...entries.values()]
     } else {
@@ -146,6 +155,7 @@ export class Contacts {
     if (book.status === 'fulfilled') {
       const entries = new Map<string, Entry>()
       add(entries, book.value?.saved ?? [], SAVED_WEIGHT)
+      for (const a of book.value?.saved ?? []) known.add(a.email.trim().toLowerCase())
       c.bookSaved = entries.size
       add(entries, book.value?.other ?? [], RECEIVED_WEIGHT)
       c.book = [...entries.values()]
@@ -156,6 +166,7 @@ export class Contacts {
       c.bookError = errorText(book.reason)
       console.error(`[contacts ${acc.email}] address book failed:`, c.bookError)
     }
+    c.known = [...known]
   }
 
   /** Counts recipients of a message just sent, so they show up before the next scan. */
@@ -168,6 +179,7 @@ export class Contacts {
     const entries = new Map(c.mail.map((e) => [e.email.toLowerCase(), e]))
     add(entries, addrs, SENT_WEIGHT)
     c.mail = [...entries.values()]
+    c.known = [...new Set([...(c.known ?? []), ...addrs.map((a) => a.email.toLowerCase())])]
     this.save()
   }
 }

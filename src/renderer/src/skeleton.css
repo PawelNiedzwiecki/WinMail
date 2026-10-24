@@ -7,12 +7,25 @@
   min-height: 260px;
   padding: 22px 0 8px;
 }
+.msg-skeleton.is-compact {
+  min-height: 0;
+  padding: 12px 0;
+}
 .msg-skeleton-gap {
   height: 10px;
 }
 .skel-line {
   height: 12px;
   border-radius: 6px;
+}
+/* Stands in for a banner or hero image at the top of a newsletter-style message. */
+.skel-banner {
+  height: 140px;
+  margin-bottom: 8px;
+  border-radius: 10px;
+}
+.skel-line,
+.skel-banner {
   background: linear-gradient(
     90deg,
     var(--input-bg) 0%,
@@ -30,8 +43,60 @@
     background-position: -100% 0;
   }
 }
+/* The body appears in one go, with a short fade instead of a jump. */
+.msg-body,
+.msg-body-html,
+.attachments,
+.reply-buttons {
+  animation: msg-body-in 150ms ease-out;
+}
+@keyframes msg-body-in {
+  from {
+    opacity: 0;
+  }
+}
 @media (prefers-reduced-motion: reduce) {
-  .skel-line {
+  .skel-line,
+  .skel-banner,
+  .msg-body,
+  .msg-body-html,
+  .attachments,
+  .reply-buttons {
     animation: none;
   }
+}
+
+/* Placeholder rows in the message list. Gaps match a real row (.row-top, subject, preview). */
+.skel-row {
+  pointer-events: none;
+}
+.skel-row .row-main {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding-top: 3px;
+  padding-bottom: 3px;
+}
+.skel-row .row-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+}
+.skel-row .skel-line {
+  height: 11px;
+}
+.skel-row .skel-date {
+  width: 36px;
+  flex-shrink: 0;
+}
+/* Sidebar folders while the list of mailboxes loads. */
+.sb-loading {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 8px 12px 8px 30px;
+}
+.sb-loading .skel-line {
+  height: 10px;
 }

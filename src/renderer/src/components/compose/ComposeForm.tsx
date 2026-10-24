@@ -1,11 +1,14 @@
 import { Paperclip } from 'lucide-react'
+import { AnimatePresence, motion } from 'motion/react'
 import { useEffect, useRef, useState, type DragEvent, type KeyboardEvent } from 'react'
 import { addFiles, answerConfirm, close, discard, focusList, save, send, unfoldQuote } from '../../compose/actions'
 import { touch } from '../../compose/autosave'
 import { useComposeCtx } from '../../compose/ComposeContext'
 import { isKey, KEYS } from '../../compose/keys'
-import { editorOf, updateSession, useSession, type RecipientField as Field } from '../../compose/sessions'
+import { editorOf, updateSession, useLastSession, type RecipientField as Field } from '../../compose/sessions'
+import { exitTransition } from '../../motion'
 import { hasEscapeLayer } from '../../useEscape'
+import { Collapse } from '../Collapse'
 import { AttachmentChips } from './AttachmentChips'
 import { ComposeFooter } from './ComposeFooter'
 import { FormatBar } from './FormatBar'
@@ -29,7 +32,7 @@ type Popover = { kind: 'link'; anchor?: HTMLAnchorElement } | { kind: 'schedule'
 
 /** Everything inside a card or inline reply: fields, editor, attachments, footer. */
 export function ComposeForm({ id, showSubject }: { id: string; showSubject: boolean }) {
-  const s = useSession(id)
+  const s = useLastSession(id)
   const ctx = useComposeCtx()
   const [formatOpen, setFormatOpen] = useState(readFormatOpen)
   const [popover, setPopover] = useState<Popover>(null)
@@ -117,29 +120,33 @@ export function ComposeForm({ id, showSubject }: { id: string; showSubject: bool
 
   return (
     <div className="compose-form" data-compose={id} onKeyDown={onKeyDown} {...dragProps}>
-      {s.banner && (
-        <div className={`compose-banner is-${s.banner.tone}`} role={s.banner.tone === 'error' ? 'alert' : 'status'}>
-          {s.banner.text}
-        </div>
-      )}
-      {s.confirm && (
-        <div className="compose-confirm" role="alertdialog">
-          <span>{s.confirm.text}</span>
-          <span className="confirm-actions">
-            {s.confirm.alt && (
-              <button className="btn" onClick={() => answerConfirm(id, 'alt')}>
-                {s.confirm.alt.label}
+      <Collapse open={!!s.banner}>
+        {s.banner && (
+          <div className={`compose-banner is-${s.banner.tone}`} role={s.banner.tone === 'error' ? 'alert' : 'status'}>
+            {s.banner.text}
+          </div>
+        )}
+      </Collapse>
+      <Collapse open={!!s.confirm}>
+        {s.confirm && (
+          <div className="compose-confirm" role="alertdialog">
+            <span>{s.confirm.text}</span>
+            <span className="confirm-actions">
+              {s.confirm.alt && (
+                <button className="btn" onClick={() => answerConfirm(id, 'alt')}>
+                  {s.confirm.alt.label}
+                </button>
+              )}
+              <button className="btn" onClick={() => answerConfirm(id, 'cancel')}>
+                Cancel
               </button>
-            )}
-            <button className="btn" onClick={() => answerConfirm(id, 'cancel')}>
-              Cancel
-            </button>
-            <button className="btn btn-primary" onClick={() => answerConfirm(id, 'ok')}>
-              {s.confirm.ok}
-            </button>
-          </span>
-        </div>
-      )}
+              <button className="btn btn-primary" onClick={() => answerConfirm(id, 'ok')}>
+                {s.confirm.ok}
+              </button>
+            </span>
+          </div>
+        )}
+      </Collapse>
       <RecipientsBlock session={s} accounts={ctx.accounts} controls={controls} />
       {showSubject && (
         <div className="compose-row">
@@ -179,14 +186,22 @@ export function ComposeForm({ id, showSubject }: { id: string; showSubject: bool
         )}
         <AttachmentChips sessionId={id} attachments={s.attachments} account={account} />
       </div>
-      {popover?.kind === 'link' && (
-        <LinkPopover id={id} anchor={popover.anchor} onClose={() => setPopover(null)} />
-      )}
-      {popover?.kind === 'schedule' && <SchedulePopover session={s} onClose={() => setPopover(null)} />}
-      {popover?.kind === 'template' && (
-        <NamePopover initial={s.subject} onSave={(name) => saveTemplate(id, name)} onClose={() => setPopover(null)} />
-      )}
-      {formatOpen && !s.plain && <FormatBar id={id} onLink={() => setPopover({ kind: 'link' })} />}
+      {/* Popovers fade out on close; the CSS keyframe plays the entrance. Opacity only, since a
+          transform here would become the popover's containing block and move it. */}
+      <AnimatePresence>
+        {popover && (
+          <motion.div key={popover.kind} initial={false} animate={{ opacity: 1 }} exit={{ opacity: 0, transition: exitTransition }}>
+            {popover.kind === 'link' && <LinkPopover id={id} anchor={popover.anchor} onClose={() => setPopover(null)} />}
+            {popover.kind === 'schedule' && <SchedulePopover session={s} onClose={() => setPopover(null)} />}
+            {popover.kind === 'template' && (
+              <NamePopover initial={s.subject} onSave={(name) => saveTemplate(id, name)} onClose={() => setPopover(null)} />
+            )}
+          </motion.div>
+        )}
+      </AnimatePresence>
+      <Collapse open={formatOpen && !s.plain}>
+        <FormatBar id={id} onLink={() => setPopover({ kind: 'link' })} />
+      </Collapse>
       <ComposeFooter
         session={s}
         settings={ctx.settings}

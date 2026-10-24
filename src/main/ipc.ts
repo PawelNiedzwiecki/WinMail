@@ -1,15 +1,17 @@
-import { app, BrowserWindow, dialog, ipcMain, nativeTheme, net } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, nativeTheme, net, shell } from 'electron'
 import { writeFile } from 'fs/promises'
 import type {
   AccountInput,
   AccountUpdate,
   AiInput,
+  InviteAnswer,
   MoveTarget,
   SendInput,
   Settings
 } from '../shared/types'
 import type { MailService } from './mail'
 import type { Store } from './store'
+import type { MailCache } from './cache'
 import { cancelSignIn, revoke } from './google'
 import type { Contacts } from './contacts'
 import type { Outbox } from './outbox'
@@ -53,7 +55,7 @@ async function printHtml(html: string): Promise<void> {
   }
 }
 
-export function registerIpc(store: Store, mail: MailService, contacts: Contacts, outbox: Outbox): void {
+export function registerIpc(store: Store, mail: MailService, contacts: Contacts, outbox: Outbox, cache: MailCache): void {
   const attachments = new AttachmentGrants([store.outboxDir, TEMP_ROOT])
 
   handle('accounts:list', () => store.listAccounts())
@@ -69,11 +71,17 @@ export function registerIpc(store: Store, mail: MailService, contacts: Contacts,
       before.enabled !== acc.enabled ||
       JSON.stringify([before.imap, before.smtp]) !== JSON.stringify([acc.imap, acc.smtp])
     if (server) await mail.disconnect(acc.id)
+    // A different server or login is a different mailbox; any other change still points at the same one.
+    const sameBox = (x: string, y: string) => x.toLowerCase() === y.toLowerCase()
+    if (!sameBox(before.imap.host, acc.imap.host) || before.imap.port !== acc.imap.port || !sameBox(before.username, acc.username)) {
+      cache.forgetAccount(acc.id)
+    }
     if (u.password) contacts.rescan(acc.id)
     return acc
   })
   handle('accounts:remove', async (id: string) => {
     await mail.disconnect(id)
+    cache.forgetAccount(id)
     if (store.listAccounts().find((a) => a.id === id)?.auth === 'oauth') void revoke(store.getPassword(id))
     store.removeAccount(id)
   })
@@ -96,20 +104,45 @@ export function registerIpc(store: Store, mail: MailService, contacts: Contacts,
   handle('mail:messages', (id: string, path: string, limit?: number) => mail.listMessages(id, path, limit))
   handle('mail:search', (id: string, path: string, q: string, limit?: number) => mail.search(id, path, q, limit))
   handle('mail:thread', (id: string, threadId: string) => mail.listThread(id, threadId))
-  handle('mail:message', (id: string, path: string, uid: number) => mail.getMessage(id, path, uid))
-  handle('mail:source', (id: string, path: string, uid: number) => mail.getSource(id, path, uid))
-  handle('mail:flags', (id: string, path: string, uids: number[], f: Flags) => mail.setFlags(id, path, uids, f))
-  handle('mail:markAllRead', (id: string, path: string) => mail.markAllRead(id, path))
-  handle('mail:move', (id: string, path: string, uids: number[], t: MoveTarget) => mail.move(id, path, uids, t))
-  handle('mail:moveTo', (id: string, path: string, uids: number[], dest: string) => mail.moveTo(id, path, uids, dest))
-  handle('mail:snooze', (id: string, path: string, uids: number[], until: string) =>
-    mail.snooze(id, path, uids, until)
+  // Read from the copy on this PC; no connection is made.
+  handle('mail:cachedMailboxes', (id: string) => cache.mailboxes(id))
+  handle('mail:cachedList', (id: string, path: string, limit: number, view?: string) => {
+    if (view) {
+      const rows = cache.view(id, path, view)
+      return rows && { messages: rows.slice(0, limit), more: rows.length > limit }
+    }
+    return cache.window(id, path, limit)
+  })
+  handle('mail:cacheSize', () => cache.size())
+  handle('mail:clearCache', () => cache.clear())
+  handle('mail:message', (id: string, path: string, uid: number, v?: string) => mail.getMessage(id, path, uid, v))
+  handle('mail:source', (id: string, path: string, uid: number, v?: string) => mail.getSource(id, path, uid, v))
+  handle('mail:flags', (id: string, path: string, uids: number[], f: Flags, v?: string) =>
+    mail.setFlags(id, path, uids, f, v)
   )
-  handle('mail:saveAttachment', async (id: string, path: string, uid: number, index: number) => {
-    const { filename, content } = await mail.getAttachment(id, path, uid, index)
+  handle('mail:markAllRead', (id: string, path: string) => mail.markAllRead(id, path))
+  handle('mail:move', (id: string, path: string, uids: number[], t: MoveTarget, v?: string) =>
+    mail.move(id, path, uids, t, v)
+  )
+  handle('mail:moveTo', (id: string, path: string, uids: number[], dest: string, v?: string) =>
+    mail.moveTo(id, path, uids, dest, v)
+  )
+  handle('mail:snooze', (id: string, path: string, uids: number[], until: string, v?: string) =>
+    mail.snooze(id, path, uids, until, v)
+  )
+  handle('mail:saveAttachment', async (id: string, path: string, uid: number, index: number, v?: string) => {
+    const { filename, content } = await mail.getAttachment(id, path, uid, index, v)
     const file = await saveDialog(filename)
     if (file) await writeFile(file, content)
     return file
+  })
+  handle('mail:answerInvite', (id: string, path: string, uid: number, answer: InviteAnswer, v?: string) =>
+    mail.answerInvite(id, path, uid, answer, v)
+  )
+  handle('mail:openInvite', async (id: string, path: string, uid: number, v?: string) => {
+    const file = await mail.inviteFile(id, path, uid, v)
+    const err = await shell.openPath(file)
+    if (err) throw new Error(`No calendar app opened the invitation: ${err}`)
   })
   handle('file:saveText', async (name: string, text: string) => {
     const file = await saveDialog(name)
@@ -150,7 +183,7 @@ export function registerIpc(store: Store, mail: MailService, contacts: Contacts,
     return mail.saveDraft(input)
   })
   handle('mail:deleteDraft', (id: string, uid: number) => mail.deleteDraft(id, uid))
-  handle('mail:openDraft', (id: string, path: string, uid: number) => mail.openDraft(id, path, uid))
+  handle('mail:openDraft', (id: string, path: string, uid: number, v?: string) => mail.openDraft(id, path, uid, v))
   handle('outbox:schedule', (input: SendInput, sendAt: string) => {
     attachments.check(input)
     return outbox.schedule(input, sendAt)

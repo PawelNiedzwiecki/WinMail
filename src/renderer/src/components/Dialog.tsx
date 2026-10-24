@@ -1,5 +1,6 @@
+import { motion } from 'motion/react'
 import type { ReactNode } from 'react'
-import { useEscape } from '../useEscape'
+import { Backdrop, panelExit, useModalEscape } from './Backdrop'
 
 interface Props {
   title: string
@@ -7,24 +8,31 @@ interface Props {
   /** Extra class on the panel, for its width. */
   className?: string
   footer?: ReactNode
+  /** Optional badge shown above the title (used by confirmation dialogs). */
+  icon?: ReactNode
   children: ReactNode
 }
 
-/** A small centered dialog: closes on Escape or a click outside. */
+/**
+ * A small centered dialog: closes on Escape or a click outside. Render it inside
+ * <AnimatePresence> for it to fade out on close.
+ */
 export function Dialog(p: Props) {
-  useEscape(p.onClose)
+  useModalEscape(p.onClose)
   return (
-    <div className="modal-backdrop" onMouseDown={p.onClose}>
-      <div
+    <Backdrop onMouseDown={p.onClose}>
+      <motion.div
+        {...panelExit}
         className={`dialog ${p.className ?? ''}`}
         role="dialog"
         aria-label={p.title}
         onMouseDown={(e) => e.stopPropagation()}
       >
+        {p.icon && <div className="dialog-icon">{p.icon}</div>}
         <h2 className="dialog-title">{p.title}</h2>
         <div className="dialog-body">{p.children}</div>
         {p.footer && <div className="dialog-footer">{p.footer}</div>}
-      </div>
-    </div>
+      </motion.div>
+    </Backdrop>
   )
 }

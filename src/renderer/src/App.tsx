@@ -6,22 +6,29 @@ import {
   FolderInput,
   Forward,
   Inbox,
+  Info,
   Mail,
   MailCheck,
   MailOpen,
+  MessagesSquare,
   Printer,
   Reply,
   ReplyAll,
   ShieldAlert,
   Sparkles,
-  Trash2
+  Tag,
+  Trash2,
+  User,
+  Users
 } from 'lucide-react'
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { AnimatePresence, motion } from 'motion/react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react'
 import {
   DEFAULT_SETTINGS,
   type Account,
   type GmailCategory,
   type MailboxInfo,
+  type InviteAnswer,
   type MessageDetail,
   type MessageSummary,
   type MoveResult,
@@ -30,6 +37,7 @@ import {
   type Settings,
   type Unsubscribe
 } from '@shared/types'
+import { categorize } from '@shared/categorize'
 import { api } from './api'
 import { Sidebar, inboxPath, type Selection } from './components/Sidebar'
 import { MessageList } from './components/MessageList'
@@ -49,6 +57,7 @@ import {
   restoreRecovered,
   setComposeEnv,
   startComposeEvents,
+  startPopoutEvents,
   stash
 } from './compose/actions'
 import { isKey, KEYS } from './compose/keys'
@@ -60,12 +69,16 @@ import { ContextMenu, type MenuItem } from './components/ContextMenu'
 import { ToastStack } from './components/ToastStack'
 import { FolderPicker } from './components/FolderPicker'
 import { WhenPicker } from './components/WhenPicker'
+import { ConfirmDeleteDialog } from './components/ConfirmDeleteDialog'
 import { SourceDialog } from './components/SourceDialog'
 import { ScheduledDialog } from './components/ScheduledDialog'
 import { formatWhen } from './compose/schedule'
 import { groupThreads, type Thread } from './threads'
+import { applyReduceMotion, dur, ease } from './motion'
+import { drawAvatar, drawBadge } from './notifyArt'
 import { printDocument } from './print'
 import { toast } from './toasts'
+import { Resizer, usePaneWidth } from './components/Resizer'
 
 const errMsg = (e: unknown) => (e instanceof Error ? e.message : String(e))
 const showError = (e: unknown) => toast({ text: errMsg(e), tone: 'error' })
@@ -75,14 +88,89 @@ const PAGE = 60
 /** Server search waits this long after the last keystroke. */
 const SEARCH_DELAY_MS = 400
 
-const CATEGORIES: { id: GmailCategory | null; label: string }[] = [
-  { id: null, label: 'All' },
-  { id: 'primary', label: 'Primary' },
-  { id: 'social', label: 'Social' },
-  { id: 'promotions', label: 'Promotions' },
-  { id: 'updates', label: 'Updates' },
-  { id: 'forums', label: 'Forums' }
+/** `color` tints the tab's icon, and fills it when active (white text on each). */
+const CATEGORIES: { id: GmailCategory | null; label: string; icon: ReactNode; color: string }[] = [
+  { id: null, label: 'All', icon: <Inbox size={14} />, color: '#475569' },
+  { id: 'primary', label: 'Primary', icon: <User size={14} />, color: '#2563eb' },
+  { id: 'social', label: 'Social', icon: <Users size={14} />, color: '#db2777' },
+  { id: 'promotions', label: 'Promotions', icon: <Tag size={14} />, color: '#16a34a' },
+  { id: 'updates', label: 'Updates', icon: <Info size={14} />, color: '#ea580c' },
+  { id: 'forums', label: 'Forums', icon: <MessagesSquare size={14} />, color: '#7c3aed' }
 ]
+
+/**
+ * One mailbox's messages, narrowed to a category. Google accounts ask Gmail (its own sorting); other
+ * accounts are sorted here from sender and headers. `raw` is how many messages the server returned,
+ * for deciding whether there is more to load.
+ */
+async function fetchBox(
+  account: Account | undefined,
+  path: string,
+  max: number,
+  cat: GmailCategory | null,
+  accountId = account?.id ?? ''
+): Promise<{ items: MessageSummary[]; raw: number }> {
+  if (cat && account?.provider === 'gmail') {
+    const items = await api.search(accountId, path, `category:${cat}`, max)
+    return { items, raw: items.length }
+  }
+  const all = await api.listMessages(accountId, path, max)
+  if (!cat) return { items: all, raw: all.length }
+  const of = (m: MessageSummary) => m.category ?? categorize({ email: m.from.email, subject: m.subject })
+  return { items: all.filter((m) => of(m) === cat), raw: all.length }
+}
+
+/**
+ * What is saved on this PC for one mailbox, in the same shape as `fetchBox`; null when nothing is
+ * saved or it cannot be read. Never waits for the server.
+ */
+async function cachedBox(
+  account: Account | undefined,
+  path: string,
+  max: number,
+  cat: GmailCategory | null,
+  accountId = account?.id ?? ''
+): Promise<{ items: MessageSummary[]; raw: number } | null> {
+  try {
+    const gmailTab = cat && account?.provider === 'gmail'
+    const saved = await api.cachedList(accountId, path, max, gmailTab ? `category:${cat}` : undefined)
+    if (!saved) return null
+    // As in fetchBox, `raw` says whether the server had more than was returned.
+    const raw = saved.more ? max : saved.messages.length
+    if (!cat || gmailTab) return { items: saved.messages, raw }
+    const of = (m: MessageSummary) => m.category ?? categorize({ email: m.from.email, subject: m.subject })
+    return { items: saved.messages.filter((m) => of(m) === cat), raw }
+  } catch {
+    return null
+  }
+}
+
+/** A folder's UIDs were renumbered: nothing remembered about its messages can be trusted. */
+function forgetFolder(accountId: string, path: string) {
+  for (const k of [...listCache.keys()]) if (k.startsWith(`${accountId}/${path}|`) || k.startsWith('all:')) listCache.delete(k)
+  for (const k of [...detailCache.keys()]) if (k.startsWith(`${accountId}|${path}|`)) detailCache.delete(k)
+}
+
+/** Identifies one message list: what is selected, the inbox tab, and which accounts it spans. */
+function listKeyOf(sel: Selection, list: Account[], cat: GmailCategory | null): string {
+  const where = sel.kind === 'mailbox' ? `${sel.accountId}/${sel.path}` : `all:${list.filter((a) => a.enabled).map((a) => a.id).join(',')}`
+  return `${where}|${cat ?? ''}`
+}
+
+/**
+ * Lists already shown this session, so going back to a folder shows it at once and then
+ * checks the server quietly. Kept for the life of the window.
+ */
+const listCache = new Map<string, { messages: MessageSummary[]; hasMore: boolean; limit: number }>()
+
+/** Opened messages. A message's body never changes on the server, so it only needs fetching once. */
+const detailCache = new Map<string, MessageDetail>()
+const DETAIL_CACHE_MAX = 200
+function cacheDetail(d: MessageDetail) {
+  detailCache.delete(d.key)
+  detailCache.set(d.key, d)
+  if (detailCache.size > DETAIL_CACHE_MAX) detailCache.delete(detailCache.keys().next().value!)
+}
 
 const MOVED: Record<MoveTarget, string> = {
   trash: 'deleted',
@@ -94,15 +182,16 @@ const MOVED: Record<MoveTarget, string> = {
 type Dialog =
   | { kind: 'move'; items: MessageSummary[] }
   | { kind: 'snooze'; items: MessageSummary[] }
+  | { kind: 'delete'; items: MessageSummary[] }
   | { kind: 'source'; subject: string; source: string }
   | { kind: 'scheduled' }
 
 /** Splits messages by the folder they are in, since IMAP acts on one folder at a time. */
-function byFolder(items: MessageSummary[]): { accountId: string; mailbox: string; uids: number[] }[] {
-  const groups = new Map<string, { accountId: string; mailbox: string; uids: number[] }>()
+function byFolder(items: MessageSummary[]): { accountId: string; mailbox: string; uids: number[]; uidValidity?: string }[] {
+  const groups = new Map<string, { accountId: string; mailbox: string; uids: number[]; uidValidity?: string }>()
   for (const m of items) {
     const k = `${m.accountId}|${m.mailbox}`
-    const g = groups.get(k) ?? { accountId: m.accountId, mailbox: m.mailbox, uids: [] }
+    const g = groups.get(k) ?? { accountId: m.accountId, mailbox: m.mailbox, uids: [], uidValidity: m.uidValidity }
     g.uids.push(m.uid)
     groups.set(k, g)
   }
@@ -121,6 +210,8 @@ export default function App() {
   const [selection, setSelection] = useState<Selection>({ kind: 'all-inboxes' })
   const [messages, setMessages] = useState<MessageSummary[]>([])
   const [listLoading, setListLoading] = useState(false)
+  /** A different list is loading (folder, account or tab changed): show placeholders, not the old rows. */
+  const [listSwitching, setListSwitching] = useState(false)
   const [listError, setListError] = useState<string | null>(null)
   const [refreshing, setRefreshing] = useState(false)
   /** accountId|path -> new messages being downloaded right now */
@@ -140,6 +231,8 @@ export default function App() {
   const [remoteKeys, setRemoteKeys] = useState<Set<string>>(new Set())
   const [aiAvailable, setAiAvailable] = useState(false)
   const [settingsTab, setSettingsTab] = useState<SettingsTab | null>(null)
+  const [sidebarW, setSidebarW, resetSidebarW] = usePaneWidth('winmail.sidebarW', '--sidebar-w', 220, 180, 380)
+  const [listW, setListW, resetListW] = usePaneWidth('winmail.listW', '--list-w', 340, 260, 640)
   const [adding, setAdding] = useState(false)
   const [menu, setMenu] = useState<{ key: string; x: number; y: number } | null>(null)
   const [boxMenu, setBoxMenu] = useState<{ accountId: string; path: string; x: number; y: number } | null>(null)
@@ -150,6 +243,8 @@ export default function App() {
   const anchor = useRef<string | null>(null)
   /** Gmail inbox tab; null shows the whole inbox. */
   const [category, setCategory] = useState<GmailCategory | null>(null)
+  /** The list shows only unread messages (the "Unread" filter in its header). */
+  const [unreadOnly, setUnreadOnly] = useState(false)
   /** Server search results; null while the search box is empty. */
   const [searchResults, setSearchResults] = useState<MessageSummary[] | null>(null)
   const [searching, setSearching] = useState(false)
@@ -190,7 +285,30 @@ export default function App() {
     )
   }, [])
 
+  /** The lists the selection spans, as saved on this PC; null unless every one of them is saved. */
+  const savedList = useCallback(
+    async (sel: Selection, list: Account[], boxes: Record<string, MailboxInfo[]>, max: number, cat: GmailCategory | null) => {
+      if (sel.kind === 'mailbox') {
+        const got = await cachedBox(list.find((a) => a.id === sel.accountId), sel.path, max, cat, sel.accountId)
+        return got && { result: got.items, more: got.raw >= max, byAccount: { [sel.accountId]: got.items } }
+      }
+      const targets = list.filter((a) => a.enabled)
+      const got = await Promise.all(targets.map((a) => cachedBox(a, inboxPath(boxes[a.id]), max, cat)))
+      if (!targets.length || got.some((g) => !g)) return null
+      const byAccount: Record<string, MessageSummary[]> = {}
+      targets.forEach((a, i) => (byAccount[a.id] = got[i]!.items))
+      return {
+        result: got.flatMap((g) => g!.items).sort((a, b) => b.date.localeCompare(a.date)),
+        more: got.some((g) => g!.raw >= max),
+        byAccount
+      }
+    },
+    []
+  )
+
   const listReq = useRef(0)
+  /** The cache key of the list on screen; null while it holds nothing worth keeping. */
+  const shownKey = useRef<string | null>(null)
   const loadMessages = useCallback(
     async (
       sel: Selection,
@@ -198,13 +316,31 @@ export default function App() {
       boxes: Record<string, MailboxInfo[]>,
       quiet = false,
       max = PAGE,
-      cat: GmailCategory | null = null
+      cat: GmailCategory | null = null,
+      /** First visit to a list this session: show what is saved on this PC while the server is asked. */
+      fromDisk = false
     ) => {
       const req = ++listReq.current
+      // Rows painted from disk stay on screen if the server cannot be reached, like a quiet refresh.
+      let painted: Record<string, MessageSummary[]> | null = null
+      if (fromDisk) {
+        const saved = await savedList(sel, list, boxes, max, cat)
+        if (req !== listReq.current) return
+        if (saved) {
+          painted = saved.byAccount
+          shownKey.current = listKeyOf(sel, list, cat)
+          setMessages(saved.result)
+          setHasMore(saved.more)
+          setListSwitching(false)
+        }
+      }
       if (!quiet) {
         setListLoading(true)
         setListError(null)
+        // A page of the same size is a new list; a larger one is "load more" and keeps its rows.
+        if (max === PAGE && !painted) setListSwitching(true)
       }
+      const keepRows = quiet || !!painted
       try {
         let result: MessageSummary[]
         let more = false
@@ -212,42 +348,53 @@ export default function App() {
         if (sel.kind === 'all-inboxes') {
           const targets = list.filter((a) => a.enabled)
           const settled = await Promise.allSettled(
-            targets.map((a) => api.listMessages(a.id, inboxPath(boxes[a.id]), max))
+            targets.map((a) => fetchBox(a, inboxPath(boxes[a.id]), max, cat))
           )
           result = settled.flatMap((s, i) => {
             if (s.status === 'fulfilled') {
-              more ||= s.value.length >= max
-              return s.value
+              more ||= s.value.raw >= max
+              return s.value.items
             }
-            errors.push(`${targets[i]!.description}: ${errMsg(s.reason)}`)
-            return []
+            const a = targets[i]!
+            errors.push(`${a.description}: ${errMsg(s.reason)}`)
+            // An account that cannot be reached keeps the rows it has, instead of vanishing from the list.
+            if (!keepRows) return []
+            const inbox = inboxPath(boxes[a.id])
+            return painted?.[a.id] ?? latest.current.messages.filter((m) => m.accountId === a.id && m.mailbox === inbox)
           })
           result.sort((a, b) => b.date.localeCompare(a.date))
         } else {
-          result = cat
-            ? await api.search(sel.accountId, sel.path, `category:${cat}`, max)
-            : await api.listMessages(sel.accountId, sel.path, max)
-          more = result.length >= max
+          const got = await fetchBox(list.find((a) => a.id === sel.accountId), sel.path, max, cat, sel.accountId)
+          result = got.items
+          more = got.raw >= max
         }
         if (req !== listReq.current) return
+        shownKey.current = listKeyOf(sel, list, cat)
         setMessages(result)
         setHasMore(more)
         setListError(errors.length ? errors.join('\n') : null)
       } catch (e) {
         if (req === listReq.current) {
-          setMessages([])
+          // A background check that fails keeps the rows already shown, e.g. while offline.
+          if (!keepRows) {
+            shownKey.current = null
+            setMessages([])
+          }
           setListError(errMsg(e))
         }
       } finally {
-        if (req === listReq.current) setListLoading(false)
+        if (req === listReq.current) {
+          setListLoading(false)
+          setListSwitching(false)
+        }
       }
     },
     []
   )
 
   // Keep latest values for callbacks that run from timers/events.
-  const latest = useRef({ selection, accounts, mailboxes, limit, category })
-  latest.current = { selection, accounts, mailboxes, limit, category }
+  const latest = useRef({ selection, accounts, mailboxes, limit, category, messages })
+  latest.current = { selection, accounts, mailboxes, limit, category, messages }
 
   /** `only` limits the folder-count reload to accounts that reported a change. */
   const refresh = useCallback(
@@ -310,11 +457,27 @@ export default function App() {
     []
   )
 
+  useEffect(() => applyReduceMotion(settings.reduceMotion), [settings.reduceMotion])
+
+  // Notifications ask this window for sender pictures; the taskbar button shows unread inbox mail.
+  useEffect(() => api.onNotificationAvatar(drawAvatar), [])
+  const unreadInbox = settings.taskbarBadge
+    ? enabled.reduce((n, a) => n + (mailboxes[a.id]?.find((b) => b.specialUse === 'inbox')?.unseen ?? 0), 0)
+    : 0
+  useEffect(() => api.setTaskbarBadge(unreadInbox, drawBadge(unreadInbox)), [unreadInbox])
+
   // Initial load
   useEffect(() => {
     ;(async () => {
       const [list, s] = await Promise.all([loadAccounts(), api.getSettings()])
       setSettings(s)
+      // Folders and unread counts saved on this PC show before any server answers; a failure here changes nothing.
+      const saved = await Promise.all(
+        list.filter((a) => a.enabled).map(async (a) => [a.id, await api.cachedMailboxes(a.id).catch(() => null)] as const)
+      )
+      const seeded: Record<string, MailboxInfo[]> = {}
+      for (const [id, boxes] of saved) if (boxes) seeded[id] = boxes
+      setMailboxes((m) => ({ ...seeded, ...m }))
       setReady(true)
       await loadMailboxes(list)
     })().catch(showError)
@@ -327,10 +490,34 @@ export default function App() {
     if (!ready) return
     setSelectedKey(null)
     setChecked(new Set())
+    // A list seen before shows at once and is brought up to date in the background.
+    const key = listKeyOf(selection, accounts, category)
+    const cached = listCache.get(key)
+    if (cached) {
+      shownKey.current = key
+      setMessages(cached.messages)
+      setHasMore(cached.hasMore)
+      setLimit(cached.limit)
+      setListError(null)
+      loadMessages(selection, accounts, mailboxes, true, cached.limit, category)
+      return
+    }
+    // Until the new list arrives, the rows on screen belong to the old one; leave its cache entry alone.
+    shownKey.current = null
     setLimit(PAGE)
-    loadMessages(selection, accounts, mailboxes, false, PAGE, category)
+    loadMessages(selection, accounts, mailboxes, false, PAGE, category, true)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ready, selection, enabledKey, inboxKey, category])
+
+  // Moves, flag changes and refreshes all go through `messages`, so the cache follows them.
+  useEffect(() => {
+    if (shownKey.current) listCache.set(shownKey.current, { messages, hasMore, limit })
+  }, [messages, hasMore, limit])
+
+  // Turning the tabs off must also drop an active category filter.
+  useEffect(() => {
+    if (!settings.inboxCategories) setCategory(null)
+  }, [settings.inboxCategories])
 
   const select = (s: Selection) => {
     setCategory(null)
@@ -409,6 +596,13 @@ export default function App() {
     let timer: number | undefined
     let changed = new Set<string>()
     const off = api.onMailChanged((e) => {
+      if (e.reset) {
+        // The server renumbered this folder: what was remembered about its messages is about other ones now.
+        forgetFolder(e.accountId, e.path)
+        setSelectedKey((k) => (k && k.startsWith(`${e.accountId}|${e.path}|`) ? null : k))
+        setChecked(new Set())
+        setDetailError(null)
+      }
       changed.add(e.accountId)
       window.clearTimeout(timer)
       timer = window.setTimeout(() => {
@@ -443,7 +637,7 @@ export default function App() {
   }, [visible, settings.conversations])
 
   /** One row per conversation: the newest message, unread while any message is, flagged while any is. */
-  const rows = useMemo(() => {
+  const threadRows = useMemo(() => {
     if (!settings.conversations) return visible
     return visible.flatMap((m) => {
       const t = threads.get(m.key)
@@ -452,6 +646,32 @@ export default function App() {
       return [{ ...m, seen: t.members.every((x) => x.seen), flagged: t.members.some((x) => x.flagged) }]
     })
   }, [visible, threads, settings.conversations])
+
+  /** What the list shows (folder, category, search); when it changes, rows swap without animating. */
+  const listView = [
+    selection.kind === 'mailbox' ? `${selection.accountId}/${selection.path}` : 'all',
+    category ?? '',
+    query.trim(),
+    searchResults ? 'server' : '',
+    unreadOnly ? 'unread' : ''
+  ].join('|')
+
+  /**
+   * Rows listed while the "Unread" filter is on. One that gets read (opened, or marked) stays until the
+   * list, tab or filter changes, so reading mail doesn't pull rows out from under the pointer.
+   */
+  const keptRead = useRef({ view: '', keys: new Set<string>() })
+  const rows = useMemo(() => {
+    if (!unreadOnly) return threadRows
+    const kept = keptRead.current
+    if (kept.view !== listView) keptRead.current = { view: listView, keys: new Set() }
+    const keys = keptRead.current.keys
+    return threadRows.filter((m) => {
+      if (m.seen && !keys.has(m.key) && m.key !== selectedKey) return false
+      keys.add(m.key)
+      return true
+    })
+  }, [threadRows, unreadOnly, listView, selectedKey])
   const threadCounts = useMemo(() => {
     const map = new Map<string, number>()
     for (const t of new Set(threads.values())) if (t.members.length > 1) map.set(t.latest.key, t.members.length)
@@ -520,14 +740,26 @@ export default function App() {
   const patchMessage = (key: string, patch: Partial<MessageSummary>) => patchMessages(new Set([key]), patch)
 
   const detailReq = useRef(0)
-  useEffect(() => {
+  // A layout effect, so a cached message is on screen in the same frame as the selection.
+  useLayoutEffect(() => {
     setDetail(null)
     setDetailError(null)
     if (!selected || multi) return
     const req = ++detailReq.current
+    // Flags may have changed since it was cached; the list row has the current ones.
+    const cached = detailCache.get(selected.key)
+    if (cached) setDetail({ ...cached, ...selected })
     const t = window.setTimeout(async () => {
       try {
-        const d = await api.getMessage(selected.accountId, selected.mailbox, selected.uid)
+        let d: MessageDetail
+        if (cached) {
+          d = { ...cached, ...selected }
+          // getMessage is what marks a message read, so a cached one is marked here instead.
+          if (!selected.seen) void api.setFlags(selected.accountId, selected.mailbox, [selected.uid], { seen: true }, selected.uidValidity).catch(showError)
+        } else {
+          d = await api.getMessage(selected.accountId, selected.mailbox, selected.uid, selected.uidValidity)
+          cacheDetail(d)
+        }
         if (req !== detailReq.current) return
         setDetail(d)
         // Opening a conversation reads all of it, as in Gmail; getMessage already marked this one.
@@ -536,7 +768,7 @@ export default function App() {
           patchMessages(new Set(unread.map((m) => m.key)), { seen: true })
           unread.forEach((m) => adjustUnseen(m, -1))
           const others = unread.filter((m) => m.key !== selected.key)
-          for (const g of byFolder(others)) void api.setFlags(g.accountId, g.mailbox, g.uids, { seen: true }).catch(showError)
+          for (const g of byFolder(others)) void api.setFlags(g.accountId, g.mailbox, g.uids, { seen: true }, g.uidValidity).catch(showError)
         }
       } catch (e) {
         if (req === detailReq.current) setDetailError(errMsg(e))
@@ -606,8 +838,8 @@ export default function App() {
       for (const g of byFolder(items)) {
         const res =
           typeof to === 'string'
-            ? await api.move(g.accountId, g.mailbox, g.uids, to)
-            : await api.moveTo(g.accountId, g.mailbox, g.uids, to.path)
+            ? await api.move(g.accountId, g.mailbox, g.uids, to, g.uidValidity)
+            : await api.moveTo(g.accountId, g.mailbox, g.uids, to.path, g.uidValidity)
         if (res && res.uids.length) done.push({ accountId: g.accountId, from: g.mailbox, res })
       }
     } catch (e) {
@@ -623,7 +855,7 @@ export default function App() {
       ? async () => {
           lastUndo.current = null
           try {
-            for (const d of done) await api.moveTo(d.accountId, d.res.path, d.res.uids, d.from)
+            for (const d of done) await api.moveTo(d.accountId, d.res.path, d.res.uids, d.from, d.res.uidValidity)
             toast('Move undone')
           } catch (e) {
             showError(e)
@@ -639,7 +871,7 @@ export default function App() {
     if (!items.length) return
     takeOut(items)
     try {
-      for (const g of byFolder(items)) await api.snooze(g.accountId, g.mailbox, g.uids, at.toISOString())
+      for (const g of byFolder(items)) await api.snooze(g.accountId, g.mailbox, g.uids, at.toISOString(), g.uidValidity)
       lastUndo.current = null
       toast(`${count(items.length)} snoozed until ${formatWhen(at)}`)
     } catch (e) {
@@ -659,7 +891,7 @@ export default function App() {
     patchMessages(new Set(changed.map((m) => m.key)), flags)
     if (flags.seen !== undefined) for (const m of changed) if (m.seen !== flags.seen) adjustUnseen(m, flags.seen ? -1 : 1)
     try {
-      for (const g of byFolder(changed)) await api.setFlags(g.accountId, g.mailbox, g.uids, flags)
+      for (const g of byFolder(changed)) await api.setFlags(g.accountId, g.mailbox, g.uids, flags, g.uidValidity)
     } catch (e) {
       for (const b of before) patchMessage(b.key, { seen: b.seen, flagged: b.flagged })
       showError(e)
@@ -686,7 +918,13 @@ export default function App() {
   /** Move to… lists one account's folders, so the selection must be in one account. */
   const oneAccount = (items: MessageSummary[]) => items.length > 0 && items.every((m) => m.accountId === items[0]!.accountId)
   const askMove = (items = targets()) => oneAccount(items) && setDialog({ kind: 'move', items })
-  const askSnooze = (items = targets()) => items.length && setDialog({ kind: 'snooze', items })
+  /** Moves to the Bin, after a confirmation when Settings asks for one. */
+  const askTrash = (items = targets()) => {
+    if (!items.length) return
+    if (settings.confirmDelete) setDialog({ kind: 'delete', items })
+    else void moveMessages(items, 'trash')
+  }
+  const askSnooze =(items = targets()) => items.length && setDialog({ kind: 'snooze', items })
 
   const defaultAccountId = () => {
     if (selection.kind === 'mailbox') return selection.accountId
@@ -713,7 +951,7 @@ export default function App() {
   const saveAttachment = async (index: number) => {
     if (!selected) return
     try {
-      const path = await api.saveAttachment(selected.accountId, selected.mailbox, selected.uid, index)
+      const path = await api.saveAttachment(selected.accountId, selected.mailbox, selected.uid, index, selected.uidValidity)
       if (path) toast(`Saved to ${path}`)
     } catch (e) {
       showError(e)
@@ -721,6 +959,29 @@ export default function App() {
   }
 
   const allowRemoteFor = (m: MessageSummary | null) => settings.loadRemoteContent || (!!m && remoteKeys.has(m.key))
+
+  const answerInvite = async (answer: InviteAnswer) => {
+    if (!selected || !detail?.invite) return
+    const m = selected
+    try {
+      const invite = await api.answerInvite(m.accountId, m.mailbox, m.uid, answer, m.uidValidity)
+      setDetail((d) => {
+        if (!d || d.key !== m.key) return d
+        const next = { ...d, invite }
+        cacheDetail(next)
+        return next
+      })
+      toast(`Answer sent to ${invite.organizer?.name || invite.organizer?.email || 'the organiser'}`)
+    } catch (e) {
+      showError(e)
+      throw e
+    }
+  }
+
+  const openInvite = () => {
+    if (!selected) return
+    api.openInvite(selected.accountId, selected.mailbox, selected.uid, selected.uidValidity).catch(showError)
+  }
 
   const printMessage = async () => {
     if (!detail) return
@@ -734,7 +995,7 @@ export default function App() {
   const showOriginal = async () => {
     if (!selected) return
     try {
-      const source = await api.getSource(selected.accountId, selected.mailbox, selected.uid)
+      const source = await api.getSource(selected.accountId, selected.mailbox, selected.uid, selected.uidValidity)
       setDialog({ kind: 'source', subject: selected.subject, source })
     } catch (e) {
       showError(e)
@@ -858,7 +1119,7 @@ export default function App() {
       },
       { label: 'Snooze…', icon: <AlarmClock size={14} />, onSelect: () => askSnooze(items) },
       { label: 'Move to Junk', icon: <ShieldAlert size={14} />, onSelect: () => moveMessages(items, 'junk') },
-      { label: 'Delete', icon: <Trash2 size={14} />, shortcut: 'Del', danger: true, onSelect: () => moveMessages(items, 'trash') }
+      { label: 'Delete', icon: <Trash2 size={14} />, shortcut: 'Del', danger: true, onSelect: () => askTrash(items) }
     ]
   }
   const menuMessage = menu ? visible.find((m) => m.key === menu.key) : undefined
@@ -906,6 +1167,7 @@ export default function App() {
   }, [sessionEntries, selected?.key])
 
   useEffect(() => startComposeEvents(), [])
+  useEffect(() => startPopoutEvents(), [])
   const recovered = useRef(false)
   useEffect(() => {
     if (!ready || recovered.current || !enabled.length) return
@@ -953,11 +1215,17 @@ export default function App() {
         document.getElementById('search')?.focus()
       } else if (typing) {
         return
+      } else if (isKey(e, { key: 'z', ctrl: true })) {
+        // Not while typing, so text fields keep their own undo.
+        if (lastUndo.current) {
+          e.preventDefault()
+          lastUndo.current()
+        }
       } else if (e.key === 'Enter' && selected && isDraftsBox(selected)) {
         e.preventDefault()
         void openFromDrafts(selected)
       } else if (e.key === 'Delete') {
-        void moveMessages(targets(), 'trash')
+        askTrash()
       } else if (e.key === 'Escape' && checked.size > 0) {
         setChecked(new Set())
       } else if (isKey(e, { key: 'a', ctrl: true })) {
@@ -997,7 +1265,7 @@ export default function App() {
       if (isKey(e, { key: 'j' })) run(() => step(1, false, true))
       else if (isKey(e, { key: 'k' })) run(() => step(-1, false, true))
       else if (isKey(e, { key: 'e' })) run(() => moveMessages(targets(), 'archive'))
-      else if (isKey(e, { code: 'Digit3', shift: true })) run(() => moveMessages(targets(), 'trash'))
+      else if (isKey(e, { code: 'Digit3', shift: true })) run(() => askTrash())
       else if (isKey(e, { code: 'Digit1', shift: true })) run(() => moveMessages(targets(), 'junk'))
       else if (isKey(e, { key: 'r' })) run(() => respond('reply'))
       else if (isKey(e, { key: 'a' })) run(() => respond('all'))
@@ -1031,22 +1299,34 @@ export default function App() {
       : undefined
 
   const box = src(selection)
-  const gmailInbox =
-    selection.kind === 'mailbox' &&
-    accountById[selection.accountId]?.provider === 'gmail' &&
-    box?.specialUse === 'inbox'
-  const categoryTabs = gmailInbox ? (
-    <div className="cat-tabs" role="tablist">
+  const showCategories =
+    settings.inboxCategories &&
+    (selection.kind === 'all-inboxes' || (selection.kind === 'mailbox' && box?.specialUse === 'inbox'))
+  // The chosen tab widens to show its name; the tinted pill slides over from the previous one.
+  const categoryTabs = showCategories ? (
+    <div className="cat-tabs" role="tablist" aria-label="Inbox categories">
       {CATEGORIES.map((c) => (
-        <button
+        <motion.button
           key={c.label}
+          layout
+          transition={{ layout: { duration: dur.slow, ease: ease.out } }}
           role="tab"
           aria-selected={category === c.id}
+          title={c.label}
+          style={{ '--tab': c.color } as CSSProperties}
           className={`cat-tab ${category === c.id ? 'is-active' : ''}`}
           onClick={() => setCategory(c.id)}
         >
-          {c.label}
-        </button>
+          {category === c.id && (
+            <motion.span layoutId="cat-pill" className="cat-pill" transition={{ duration: dur.slow, ease: ease.out }} />
+          )}
+          <motion.span layout="position" className="cat-icon">
+            {c.icon}
+          </motion.span>
+          <motion.span layout="position" className="cat-label">
+            {c.label}
+          </motion.span>
+        </motion.button>
       ))}
     </div>
   ) : undefined
@@ -1079,6 +1359,7 @@ export default function App() {
         onOpenScheduled={() => setDialog({ kind: 'scheduled' })}
         onMailboxMenu={(accountId, path, x, y) => setBoxMenu({ accountId, path, x, y })}
       />
+      <Resizer width={sidebarW} onResize={setSidebarW} onReset={resetSidebarW} label="Resize sidebar" />
       <div className="content">
         <Toolbar
           hasAccounts={enabled.length > 0}
@@ -1093,6 +1374,8 @@ export default function App() {
         ) : (
           <div className="panes">
             <MessageList
+              previewLines={settings.listPreviewLines || 2}
+              density={settings.listDensity}
               title={title}
               subtitle={subtitle}
               messages={rows}
@@ -1100,7 +1383,11 @@ export default function App() {
               checkedKeys={checked}
               threadCounts={threadCounts}
               tabs={categoryTabs}
+              view={listView}
+              unreadOnly={unreadOnly}
+              onUnreadOnly={setUnreadOnly}
               loading={!ready || listLoading}
+              switching={listSwitching}
               status={status}
               error={listError}
               accountLabels={labels}
@@ -1109,7 +1396,9 @@ export default function App() {
               onSelect={onSelectRow}
               onOpen={(key) => {
                 const m = visible.find((x) => x.key === key)
-                if (m && isDraftsBox(m)) void openFromDrafts(m)
+                if (!m) return
+                if (isDraftsBox(m)) void openFromDrafts(m)
+                else api.openMessageWindow(m).catch(showError)
               }}
               onContextMenu={(key, x, y) => setMenu({ key, x, y })}
               onLoadMore={() => {
@@ -1118,6 +1407,7 @@ export default function App() {
                 loadMessages(selection, accounts, mailboxes, false, next, category)
               }}
             />
+            <Resizer width={listW} onResize={setListW} onReset={resetListW} label="Resize message list" />
             <div className="reader">
             <ActionBar
               hasSelection={!!selected || multi}
@@ -1125,7 +1415,7 @@ export default function App() {
               selectionRead={targets().every((m) => m.seen)}
               canMove={oneAccount(targets())}
               onArchive={() => moveMessages(targets(), 'archive')}
-              onTrash={() => moveMessages(targets(), 'trash')}
+              onTrash={() => askTrash()}
               onJunk={() => moveMessages(targets(), 'junk')}
               onMove={() => askMove()}
               onSnooze={() => askSnooze()}
@@ -1153,6 +1443,8 @@ export default function App() {
               aiSummary={aiSummary && aiSummary.key === selected?.key ? aiSummary : null}
               onCloseSummary={() => setAiSummary(null)}
               onUnsubscribe={unsubscribe}
+              onAnswerInvite={answerInvite}
+              onOpenInvite={openInvite}
             />
             </div>
           </div>
@@ -1160,28 +1452,35 @@ export default function App() {
       </div>
 
       <ComposeDock />
-      {settingsTab && (
-        <SettingsWindow
-          tab={settingsTab}
-          accounts={accounts}
-          settings={settings}
-          onTab={setSettingsTab}
-          onClose={() => setSettingsTab(null)}
-          onAddAccount={() => setAdding(true)}
-          onAccountsChanged={accountsChanged}
-          onSettings={updateSettings}
-        />
-      )}
-      {adding && (
-        <AddAccount
-          existing={accounts}
-          onClose={() => setAdding(false)}
-          onAdded={async () => {
-            setAdding(false)
-            await accountsChanged()
-          }}
-        />
-      )}
+      {/* Modals fade out on close; each one plays its own entrance. */}
+      <AnimatePresence>
+        {settingsTab && (
+          <SettingsWindow
+            key="settings"
+            tab={settingsTab}
+            accounts={accounts}
+            settings={settings}
+            onTab={setSettingsTab}
+            onClose={() => setSettingsTab(null)}
+            onAddAccount={() => setAdding(true)}
+            onAccountsChanged={accountsChanged}
+            onSettings={updateSettings}
+          />
+        )}
+      </AnimatePresence>
+      <AnimatePresence>
+        {adding && (
+          <AddAccount
+            key="add-account"
+            existing={accounts}
+            onClose={() => setAdding(false)}
+            onAdded={async () => {
+              setAdding(false)
+              await accountsChanged()
+            }}
+          />
+        )}
+      </AnimatePresence>
       {menu && menuMessage && (
         <ContextMenu x={menu.x} y={menu.y} items={menuItems(menuMessage)} onClose={() => setMenu(null)} />
       )}
@@ -1199,27 +1498,39 @@ export default function App() {
           onClose={() => setBoxMenu(null)}
         />
       )}
-      {dialog?.kind === 'move' && (
-        <FolderPicker
-          mailboxes={mailboxes[dialog.items[0]!.accountId] ?? []}
-          current={dialog.items[0]!.mailbox}
-          onPick={(path) => void moveMessages(dialog.items, { path })}
-          onClose={() => setDialog(null)}
-        />
-      )}
-      {dialog?.kind === 'snooze' && (
-        <WhenPicker
-          title={`Snooze ${dialog.items.length === 1 ? 'until' : `${dialog.items.length} messages until`}`}
-          onPick={(at) => void snoozeMessages(dialog.items, at)}
-          onClose={() => setDialog(null)}
-        />
-      )}
-      {dialog?.kind === 'source' && (
-        <SourceDialog subject={dialog.subject} source={dialog.source} onClose={() => setDialog(null)} />
-      )}
-      {dialog?.kind === 'scheduled' && (
-        <ScheduledDialog items={scheduled} accounts={accounts} onClose={() => setDialog(null)} />
-      )}
+      <AnimatePresence>
+        {dialog?.kind === 'move' && (
+          <FolderPicker
+            key="move"
+            mailboxes={mailboxes[dialog.items[0]!.accountId] ?? []}
+            current={dialog.items[0]!.mailbox}
+            onPick={(path) => void moveMessages(dialog.items, { path })}
+            onClose={() => setDialog(null)}
+          />
+        )}
+        {dialog?.kind === 'snooze' && (
+          <WhenPicker
+            key="snooze"
+            title={`Snooze ${dialog.items.length === 1 ? 'until' : `${dialog.items.length} messages until`}`}
+            onPick={(at) => void snoozeMessages(dialog.items, at)}
+            onClose={() => setDialog(null)}
+          />
+        )}
+        {dialog?.kind === 'delete' && (
+          <ConfirmDeleteDialog
+            key="delete"
+            count={dialog.items.length}
+            onConfirm={() => void moveMessages(dialog.items, 'trash')}
+            onClose={() => setDialog(null)}
+          />
+        )}
+        {dialog?.kind === 'source' && (
+          <SourceDialog key="source" subject={dialog.subject} source={dialog.source} onClose={() => setDialog(null)} />
+        )}
+        {dialog?.kind === 'scheduled' && (
+          <ScheduledDialog key="scheduled" items={scheduled} accounts={accounts} onClose={() => setDialog(null)} />
+        )}
+      </AnimatePresence>
       <ToastStack />
     </div>
   )
