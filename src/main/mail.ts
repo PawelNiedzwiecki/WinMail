@@ -17,6 +17,9 @@ import type {
   Account,
   AccountInput,
   Address,
+  AttachmentInfo,
+  CalendarInvite,
+  InviteAnswer,
   MailChangedEvent,
   MailProgressEvent,
   MailboxInfo,
@@ -37,6 +40,7 @@ import type { Snoozed, Store } from './store'
 import { decodeCharset, decodeTransfer, htmlToText, makePreview } from './text'
 import { GoogleTokens, REAUTH_MESSAGE, signIn as googleSignIn } from './google'
 import { TEMP_ROOT } from './attachments'
+import { buildReply, findCalendarPart, isInlineCalendar, parseInvite } from './calendar'
 
 /** Either a password or an OAuth access token (XOAUTH2). */
 export type Creds = Pick<Account, 'imap' | 'smtp' | 'username'> & { password?: string; accessToken?: string }
@@ -310,6 +314,16 @@ interface Upload {
   active: number
   idle?: NodeJS.Timeout
 }
+
+/** Subject prefix and wording of an RSVP, as Outlook and Google Calendar write them. */
+const REPLY_WORDS: Record<InviteAnswer, { subject: string; verb: string }> = {
+  ACCEPTED: { subject: 'Accepted', verb: 'accepted' },
+  TENTATIVE: { subject: 'Tentative', verb: 'tentatively accepted' },
+  DECLINED: { subject: 'Declined', verb: 'declined' }
+}
+
+const isCalendarAttachment = (a: AttachmentInfo) =>
+  /^(text\/calendar|application\/ics)$/i.test(a.contentType) || /\.ics$/i.test(a.filename)
 
 export class MailService {
   private clients = new Map<string, ImapFlow>()
@@ -976,7 +990,10 @@ export class MailService {
     // Opened before: no connection needed, so it works offline. A message that was unread when it was saved is
     // marked read on the server in the background.
     const saved = this.cache.body(accountId, path, uid)
-    if (saved && (uidValidity === undefined || saved.uidValidity === uidValidity)) {
+    const usable = saved && (uidValidity === undefined || saved.uidValidity === uidValidity)
+    // Saved before WinMail read invitations: fetched again once so the event shows, or the saved copy if offline.
+    const recheck = usable && saved.detail.invite === undefined && saved.detail.attachments.some(isCalendarAttachment)
+    if (usable && !recheck) {
       if (!saved.wasSeen) {
         this.setFlags(accountId, path, [uid], { seen: true }, saved.uidValidity).catch((err) =>
           console.error('[imap] could not mark as read:', err instanceof Error ? err.message : err)
@@ -984,6 +1001,11 @@ export class MailService {
       }
       return saved.detail
     }
+    const fetched = this.fetchMessage(accountId, path, uid)
+    return recheck ? fetched.catch(() => saved.detail) : fetched
+  }
+
+  private fetchMessage(accountId: string, path: string, uid: number): Promise<MessageDetail> {
     return this.withMailbox(accountId, path, async (c) => {
       const m = await c.fetchOne(
         String(uid),
@@ -1021,9 +1043,10 @@ export class MailService {
         threadId: m.threadId,
         unsubscribe: parseUnsubscribe(p.headerLines),
         uidValidity: String(c.mailbox && c.mailbox.uidValidity),
+        invite: this.inviteIn(accountId, p.attachments),
         attachments: p.attachments
           .map((a, index) => ({ a, index }))
-          .filter(({ a }) => !a.related)
+          .filter(({ a }) => !a.related && !isInlineCalendar(a))
           .map(({ a, index }) => ({
             index,
             filename: a.filename || 'attachment',
@@ -1070,6 +1093,91 @@ export class MailService {
       },
       uidValidity
     )
+  }
+
+  // ---------- Calendar invitations ----------
+
+  /** Your addresses on this account, for finding yourself among an event's guests. */
+  private addressesOf(accountId: string): string[] {
+    const acc = this.store.getAccount(accountId)
+    return [...new Set([acc.email, acc.username].filter((a) => a.includes('@')).map((a) => a.toLowerCase()))]
+  }
+
+  /** A broken calendar part must never stop the message from opening. */
+  private inviteIn(accountId: string, parts: { contentType: string; filename?: string; content: Buffer }[]) {
+    try {
+      const text = findCalendarPart(parts)
+      return text ? parseInvite(text, this.addressesOf(accountId)) : null
+    } catch (err) {
+      console.error('[calendar] could not read the invitation:', err instanceof Error ? err.message : err)
+      return null
+    }
+  }
+
+  /** The message's iCalendar text, from the server. */
+  private async calendarText(accountId: string, path: string, uid: number, uidValidity?: string): Promise<string> {
+    return this.withMailbox(
+      accountId,
+      path,
+      async (c) => {
+        const key = `${accountId}|${path}|${c.mailbox && c.mailbox.uidValidity}|${uid}`
+        let source = this.lastSource?.key === key ? this.lastSource.source : undefined
+        if (!source) {
+          const m = await c.fetchOne(String(uid), { uid: true, source: true }, { uid: true })
+          if (!m || !m.source) throw new Error('Message not found. It may have been moved.')
+          source = m.source
+        }
+        const text = findCalendarPart((await simpleParser(source)).attachments)
+        if (!text) throw new Error('This message has no calendar invitation.')
+        return text
+      },
+      uidValidity
+    )
+  }
+
+  /**
+   * Answers an invitation the way calendars expect (iMIP): an email to the organiser carrying an iCalendar REPLY,
+   * which Outlook, Google Calendar and iCloud apply to the event. The answer is kept with the saved message.
+   */
+  async answerInvite(accountId: string, path: string, uid: number, answer: InviteAnswer, uidValidity?: string): Promise<CalendarInvite> {
+    if (!(answer in REPLY_WORDS)) throw new Error('Unknown answer.')
+    const acc = this.store.getAccount(accountId)
+    const text = await this.calendarText(accountId, path, uid, uidValidity)
+    const invite = parseInvite(text, this.addressesOf(accountId))
+    if (!invite || invite.method !== 'REQUEST') throw new Error("This message isn't an invitation you can answer.")
+    const reply = buildReply(text, { name: acc.name, email: acc.email }, answer)
+    const words = REPLY_WORDS[answer]
+    await this.send(
+      {
+        accountId,
+        to: reply.organizer,
+        subject: `${words.subject}: ${reply.summary}`,
+        text: `${acc.name || acc.email} has ${words.verb} this invitation.`
+      },
+      undefined,
+      { method: 'REPLY', content: reply.ics }
+    )
+
+    const me = this.addressesOf(accountId)
+    const answered: CalendarInvite = {
+      ...invite,
+      answer,
+      attendees: invite.attendees.map((a) => (me.includes(a.email.toLowerCase()) ? { ...a, status: answer } : a))
+    }
+    const saved = this.cache.body(accountId, path, uid)
+    if (saved) this.cache.saveBody(accountId, path, uid, { ...saved.detail, invite: answered }, saved.uidValidity)
+    return answered
+  }
+
+  /** Writes the invitation to a temporary .ics file, for the default calendar app to open. */
+  async inviteFile(accountId: string, path: string, uid: number, uidValidity?: string): Promise<string> {
+    const text = await this.calendarText(accountId, path, uid, uidValidity)
+    const summary = parseInvite(text, [])?.summary ?? 'invite'
+    const dir = join(TEMP_ROOT, 'invites', randomUUID())
+    await mkdir(dir, { recursive: true })
+    const file = join(dir, `${summary.replace(/[<>:"/\\|?*\x00-\x1f]/g, '_').slice(0, 80) || 'invite'}.ics`)
+    await writeFile(file, text, 'utf8')
+    return file
   }
 
   async setFlags(
@@ -1246,7 +1354,7 @@ export class MailService {
   // ---------- Sending and drafts ----------
 
   /** One Message-ID and Date so the sent message and its saved copy match. */
-  private mailOptions(acc: Account, input: SendInput): Mail.Options {
+  private mailOptions(acc: Account, input: SendInput, calendar?: Mail.IcalAttachment): Mail.Options {
     const inline = input.html ? inlineImages(input.html) : null
     return {
       from: { name: acc.name, address: acc.email },
@@ -1262,6 +1370,7 @@ export class MailService {
       ],
       inReplyTo: input.inReplyTo,
       references: input.references,
+      icalEvent: calendar,
       messageId: `<${randomUUID()}@${acc.email.split('@')[1] ?? 'winmail'}>`,
       date: new Date(),
       // Attachments are local files only; never let a path fetch a URL.
@@ -1269,11 +1378,14 @@ export class MailService {
     }
   }
 
-  /** `delivered` runs as soon as the server has accepted the message, before the Sent copy and draft clean-up. */
-  async send(input: SendInput, delivered?: () => void): Promise<void> {
+  /**
+   * `delivered` runs as soon as the server has accepted the message, before the Sent copy and draft clean-up.
+   * `calendar` adds an iCalendar part, for answering invitations.
+   */
+  async send(input: SendInput, delivered?: () => void, calendar?: Mail.IcalAttachment): Promise<void> {
     const acc = this.store.getAccount(input.accountId)
     const creds = await this.creds(acc)
-    const mail = this.mailOptions(acc, input)
+    const mail = this.mailOptions(acc, input, calendar)
     const raw = await compile(mail, false)
     const transport = smtpTransport(creds)
     try {
