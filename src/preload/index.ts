@@ -44,6 +44,7 @@ const api: WinMailApi = {
   listMailboxes: (id) => call('mail:mailboxes', id),
   listMessages: (id, path, limit) => call('mail:messages', id, path, limit),
   search: (id, path, q, limit) => call('mail:search', id, path, q, limit),
+  searchQuery: (id, path, q, limit) => call('mail:searchQuery', id, path, q, limit),
   listThread: (id, threadId) => call('mail:thread', id, threadId),
   getMessage: (id, path, uid, v) => call('mail:message', id, path, uid, v),
   getSource: (id, path, uid, v) => call('mail:source', id, path, uid, v),
@@ -86,6 +87,7 @@ const api: WinMailApi = {
   aiAvailable: () => call('ai:available'),
   setAiKey: (key) => call('ai:setKey', key),
   ai: (input) => call('ai:run', input),
+  aiSearch: (question) => call('ai:search', question),
 
   listContacts: (id) => call('contacts:list', id),
   contactsStatus: (id) => call('contacts:status', id),
