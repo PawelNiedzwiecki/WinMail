@@ -24,6 +24,8 @@ src/
     contacts.ts    Contact ranking and cache (contacts.json)
     addressbook.ts Google People API and CardDAV address books
     text.ts        Charset/transfer decoding, HTML-to-text, previews
+    ai.ts          Claude calls with the user's key: summarise, suggest a reply, AI search questions
+    query.ts       Structured search (`MailQuery`) to Gmail operators or IMAP SEARCH criteria
     ipc.ts         IPC handlers (errors returned as data)
   preload/     index.ts: typed `window.winmail` bridge
   renderer/src/
@@ -34,7 +36,7 @@ src/
 ```
 
 - **IMAP connections:** one `ImapFlow` per account, reused; `withMailbox` locks a folder for each operation, then returns to INBOX after 3 s so IDLE keeps watching it.
-- **Mock mode:** opening `out/renderer/index.html` in a browser uses `mockApi.ts` (`?empty` for no accounts). Every new API method must have a mock.
+- **Mock mode:** opening `out/renderer/index.html` in a browser uses `mockApi.ts` (`?empty` for no accounts, `?ai` for a saved Claude key). Every new API method must have a mock.
 
 ## 3. Data and storage
 
@@ -59,6 +61,10 @@ Defined in `src/shared/types.ts` (`WinMailApi`), bridged in `src/preload/index.t
 | listMailboxes | `mail:mailboxes` | Folder tree with unread counts |
 | cachedMailboxes / cachedList / cacheSize / clearCache | `mail:cachedMailboxes`, `mail:cachedList`, `mail:cacheSize`, `mail:clearCache` | The saved copy on this PC, read without a connection |
 | listMessages | `mail:messages` | Newest N summaries of a folder |
+| search | `mail:search` | Server search of a folder (Gmail operators on Google) |
+| searchQuery | `mail:searchQuery` | Structured search (`MailQuery`): Gmail operators on Google, IMAP SEARCH elsewhere, in the folder or the one `query.folder` names |
+| aiAvailable / setAiKey / ai | `ai:available`, `ai:setKey`, `ai:run` | Claude key; summarise and suggested reply |
+| aiSearch | `ai:search` | Claude turns a question into a `MailQuery` (only the question is sent) |
 | getMessage | `mail:message` | Full message (marks read) |
 | setFlags | `mail:flags` | Seen / flagged |
 | move | `mail:move` | Move to inbox / archive / junk / trash |
@@ -79,9 +85,11 @@ New methods added by roadmap items are listed in the changelog entry that introd
 
 **Mailboxes.** Sidebar shows Favourites (unified Inbox + per-account inboxes) and each account's folder tree. Special folders detected via SPECIAL-USE and sorted: Inbox, Drafts, Sent, Junk, Bin, Archive, All Mail, Flagged. Unread counts for Inbox, Junk and custom folders.
 
-**Message list.** Newest 60 per folder (unified inbox merges accounts by date); "Load Older Messages" raises the limit by 60. Rows show sender, date, subject, preview, unread dot, flag, attachment clip, account label in unified view. Right-click menu: reply, reply all, forward, read/unread, flag, move to inbox, archive, Move to…, Snooze…, junk, delete. Older messages load on scroll. Optional conversation grouping with a count badge. Multi-select with Ctrl/Shift-click. Search filters loaded messages at once, then searches the server (Gmail operators on Google). Gmail inboxes have category tabs.
+**Message list.** Newest 60 per folder (unified inbox merges accounts by date); "Load Older Messages" raises the limit by 60. Rows show sender, date, subject, preview, unread dot, flag, attachment clip, account label in unified view. Right-click menu: reply, reply all, forward, read/unread, flag, move to inbox, archive, Move to…, Snooze…, junk, delete. Older messages load on scroll. Optional conversation grouping with a count badge. Multi-select with Ctrl/Shift-click. Search filters loaded messages at once, then searches the server (Gmail operators on Google). With a Claude key, the sparkle in the search box (or starting with `?`) asks for mail in plain language instead; see **AI search**. Gmail inboxes have category tabs.
 
 **Reading.** HTML sanitised with DOMPurify in a sandboxed iframe; remote content blocked until allowed (or setting on). Message appearance light/dark/same as app. Plain text linkified. Attachments listed above the body, click to save. Double-click a message in the list to open it in its own window. Opening marks read (the whole conversation when grouped). More menu: Print, Show Original, Summarise (Claude key), Move to, Snooze. Mailing lists get an Unsubscribe banner. Calendar invitations show an event card: date, time in your time zone, place, organiser and guests, Yes / Maybe / No, Add to Calendar.
+
+**AI search.** Only with a Claude key. The sparkle in the search box (or typing `?` first) switches it to a question such as "invoices from Northwind last month"; Enter asks Claude, which returns a structured query (from, to, subject words, words anywhere, first and last day, unread/read, flagged, has attachment, category, folder) through a JSON-schema structured output. Today's date and the PC's time zone go with the question so "last month" or "this week" (weeks start on Monday) resolve in the user's calendar. No mail is sent to Claude. The query runs on the server like a search: Gmail operators via X-GM-RAW on Google accounts (dates as exact local midnights), IMAP SEARCH elsewhere (SINCE / BEFORE whole days; attachments narrowed to multipart/mixed and checked from the fetched rows, categories checked with WinMail's own sorting). It searches the open mailbox, or every inbox in All Inboxes, unless the question names a folder (Sent, Bin, Junk, Archive, Drafts, Inbox, all mail). Above the list, chips show how the question was read ("From Northwind · Contains invoice · Since 1 Sept 2026 · Until 30 Sept 2026"); click a text or date chip to edit it, × to remove it, and the search runs again without asking Claude. Esc or × in the box clears it and brings the mailbox back; Esc again, the sparkle or the panel's × return to normal search. Results are not reranked by Claude: they come back newest first like other searches.
 
 **Compose.** Docked cards (bottom right; minimize, full screen, several at once) and inline replies under the message. Recipient chips (To, Cc, Bcc), From when several accounts, rich text or plain text, attachments, signature, templates. Reply uses Reply-To when present; reply all drops yourself and never uses the original Bcc. Drafts autosave to the Drafts folder; Esc or Ctrl+W saves and closes; Ctrl+Enter sends after the undo delay. See COMPOSE.md.
 
@@ -94,6 +102,15 @@ New methods added by roadmap items are listed in the changelog entry that introd
 **Shortcuts.** Ctrl+N new, Ctrl+R reply, Ctrl+Shift+R reply all, Ctrl+Shift+F forward, Ctrl+F search, Ctrl+, settings, Del delete, Up/Down move selection (Shift extends), Ctrl+A select all, Ctrl+Enter send, Esc close. Optional Gmail keys: j/k, e, #, !, r, a, f, s, Shift+I/U, x, b, v, z, c, /.
 
 ## 6. Changelog
+
+### 2026-10-26 — AI search
+- **Ask for mail in plain language** with your Claude key: "invoices from Northwind last month", "emails from Jamie about the hike with attachments", "unread newsletters this week". Sparkle button in the search box (only when a key is saved) or a leading `?`; Enter asks. See **AI search** in the feature spec.
+- Claude (`claude-opus-5-5`, low effort, server-side fallback, as for summaries) answers with a `MailQuery` through `output_config.format` (JSON schema). One small call per question with only the question and today's date; chip edits don't call Claude again. The answer is checked and tidied in `toMailQuery` (unknown values dropped, swapped dates put right).
+- `main/query.ts` turns a `MailQuery` into Gmail operators (`(from:a OR from:b)`, quoted phrases, `after:`/`before:` as epoch seconds of local midnight so British Summer Time is right, `is:unread`, `is:starred`, `has:attachment`, `category:`) or IMAP SEARCH criteria (OR for several senders, NOT-OR-NOT when a key repeats, SINCE / BEFORE the day after the last day). `MailService.searchQuery` runs it in the open folder or the folder named by `query.folder` (All Mail, else Inbox + Archive + Sent for "all").
+- UI: `components/AiSearchBar.tsx` (question and editable chips, in the list's tab slot), AI mode in `Toolbar.tsx`, state in `App.tsx` (`aiMode`, `aiSearch`, `asking`; list status "Asking Claude…"). British dates on chips ("1 Sept 2026").
+- New API (with mocks; `?ai` in mock mode): `searchQuery` (`mail:searchQuery`), `aiSearch` (`ai:search`); types `MailQuery`, `MailQueryFolder`. `ai.ts` now shares one `request()` for all Claude calls.
+- Not done: reranking results with Claude (the server already matched them and newest first suits mail; a second call would add cost and delay for little gain).
+- Checked: translation tests in Europe/London (September in BST, the week the clocks go back, single days, leap years, several senders, repeated words, quoting, compiled IMAP strings from imapflow's own compiler); the Claude request body with a stubbed network (schema, effort, fallback header, only the question sent; refusal, bad JSON and bad key messages); the UI in mock mode with Playwright in light, dark and a narrow window (sparkle only with a key, typing doesn't filter, Enter, chips remove and edit, Esc, `?` prefix, close, normal search unchanged). Not checked: a real Claude call (no key in the build container), so how well the prompt resolves dates and picks words is untested; real Gmail and IMAP servers.
 
 ### 2026-10-23 — Calendar invitations
 - Messages with an iCalendar part (Outlook, Google Calendar, iCloud invitations; a text/calendar alternative or an attached .ics) show an **event card** above the attachments: title, date tile, when (in your time zone, all-day and multi-day handled), place with links, organiser and guest count (hover for each guest's answer), Repeats for series. Cancellations are struck through; a guest's reply reads "Sam Patel accepted".
@@ -210,7 +227,7 @@ Status: `[x]` done, `[ ]` planned. *Gmail-only* items only apply to Google accou
 - ~~double click should open the mail in new window~~ done 2026-10-21
 - ~~mails are not scrollable~~ fixed 2026-10-21
 - labels in mails
-- integrating AI to summarise mails or search specific criteria
+- ~~integrating AI to summarise mails or search specific criteria~~ summarise done 2026-10-20, AI search done 2026-10-26
 - ~~picking up attachments at the top of the mail~~ done 2026-10-21
 - ~~picking up any additional events etc.~~ calendar invitations done 2026-10-23
 - ~~redesign notifications~~ done 2026-10-21 (NOTIFICATIONS.md)

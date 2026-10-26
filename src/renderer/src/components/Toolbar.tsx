@@ -1,4 +1,4 @@
-import { SquarePen, Search, RefreshCw, X } from 'lucide-react'
+import { SquarePen, Search, RefreshCw, Sparkles, X } from 'lucide-react'
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 
 interface Props {
@@ -8,6 +8,15 @@ interface Props {
   onQuery: (q: string) => void
   onRefresh: () => void
   onCompose: () => void
+  /** A Claude key is saved, so the search box can ask Claude. */
+  aiAvailable: boolean
+  /** The search box takes a question for Claude instead of filtering as you type. */
+  aiMode: boolean
+  onAiMode: (on: boolean) => void
+  /** Enter in AI mode. */
+  onAsk: () => void
+  /** Claude is reading the question. */
+  asking: boolean
 }
 
 /** Global bar: compose, refresh and search. Per-message actions live in ActionBar. */
@@ -40,13 +49,49 @@ export function Toolbar(p: Props) {
         />
       </TbButton>
       <div className="tb-spacer" />
-      <label className="search">
-        <Search size={13} />
+      <label className={p.aiMode ? 'search is-ai' : 'search'}>
+        {p.aiAvailable ? (
+          <button
+            type="button"
+            className={`search-ai ${p.asking ? 'is-busy' : ''}`}
+            title={p.aiMode ? 'Back to normal search' : 'Ask Claude to find mail (or start with ?)'}
+            aria-label={p.aiMode ? 'Back to normal search' : 'Search with Claude'}
+            aria-pressed={p.aiMode}
+            onClick={(e) => {
+              e.preventDefault()
+              p.onAiMode(!p.aiMode)
+              document.getElementById('search')?.focus()
+            }}
+          >
+            <Sparkles size={13} />
+          </button>
+        ) : (
+          <Search size={13} />
+        )}
         <input
           id="search"
-          placeholder="Search"
+          placeholder={p.aiMode ? 'Ask, e.g. invoices from Northwind last month' : 'Search'}
+          aria-label={p.aiMode ? 'Ask Claude to find mail, then press Enter' : 'Search'}
           value={p.query}
-          onChange={(e) => p.onQuery(e.target.value)}
+          onChange={(e) => {
+            const v = e.target.value
+            // "?" at the start switches to asking Claude, a shortcut to the sparkle button.
+            if (p.aiAvailable && !p.aiMode && v.startsWith('?')) {
+              p.onAiMode(true)
+              p.onQuery(v.slice(1).trimStart())
+            } else p.onQuery(v)
+          }}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' && p.aiMode) {
+              e.preventDefault()
+              p.onAsk()
+            } else if (e.key === 'Escape' && (p.query || p.aiMode)) {
+              e.preventDefault()
+              e.stopPropagation()
+              if (p.query) p.onQuery('')
+              else p.onAiMode(false)
+            }
+          }}
         />
         {p.query ? (
           <button
@@ -58,6 +103,8 @@ export function Toolbar(p: Props) {
           >
             <X size={12} />
           </button>
+        ) : p.aiMode ? (
+          <kbd className="search-kbd">Enter</kbd>
         ) : (
           <kbd className="search-kbd">Ctrl F</kbd>
         )}
