@@ -100,7 +100,10 @@ export function createMockApi(): WinMailApi {
       { path: '[Gmail]/All Mail', name: 'All Mail', specialUse: 'all', unseen: 0, depth: 0 },
       { path: 'Receipts', name: 'Receipts', specialUse: null, unseen: 0, depth: 0 },
       { path: 'Travel', name: 'Travel', specialUse: null, unseen: 0, depth: 0 },
-      { path: 'Work', name: 'Work', specialUse: null, unseen: 0, depth: 0 }
+      { path: 'Travel/Flights', name: 'Flights', specialUse: null, unseen: 0, depth: 1 },
+      { path: 'Travel/Hotels', name: 'Hotels', specialUse: null, unseen: 0, depth: 1 },
+      { path: 'Work', name: 'Work', specialUse: null, unseen: 0, depth: 0 },
+      { path: 'Work/Invoices', name: 'Invoices', specialUse: null, unseen: 0, depth: 1 }
     ]
   }
   /** Names and colours kept "on this PC"; keyword accounts also remember keywords created here. */
