@@ -21,6 +21,7 @@ import type {
   CalendarInvite,
   InviteAnswer,
   MailChangedEvent,
+  MailQuery,
   MailProgressEvent,
   MailboxInfo,
   MessageDetail,
@@ -38,6 +39,7 @@ import { categorize } from '../shared/categorize'
 import type { FolderState, FolderStatus, MailCache, SnapState } from './cache'
 import type { Snoozed, Store } from './store'
 import { decodeCharset, decodeTransfer, htmlToText, makePreview } from './text'
+import { imapNeedsCheck, keepImap, toGmailQuery, toImapSearch } from './query'
 import { GoogleTokens, REAUTH_MESSAGE, signIn as googleSignIn } from './google'
 import { TEMP_ROOT } from './attachments'
 import { buildReply, findCalendarPart, isInlineCalendar, parseInvite } from './calendar'
@@ -872,6 +874,50 @@ export class MailService {
       if (gmail && CATEGORY_QUERY.test(query)) this.cache.saveView(accountId, path, query, found, String(c.mailbox && c.mailbox.uidValidity))
       return found
     })
+  }
+
+  /**
+   * A structured search (AI search and its chips): Gmail operators on Google accounts, IMAP SEARCH elsewhere,
+   * in `path` or the folder `query.folder` names. Newest first.
+   */
+  async searchQuery(accountId: string, path: string, query: MailQuery, limit = 60): Promise<MessageSummary[]> {
+    const gmail = this.store.getAccount(accountId).provider === 'gmail'
+    const raw = gmail ? toGmailQuery(query) : ''
+    const criteria: SearchObject = gmail ? (raw ? { gmraw: raw } : { all: true }) : toImapSearch(query)
+    const check = !gmail && imapNeedsCheck(query)
+    const found: MessageSummary[] = []
+    for (const box of await this.queryFolders(accountId, path, query, gmail)) {
+      const list = await this.withMailbox(accountId, box, async (c) => {
+        if (!c.mailbox || !c.mailbox.exists) return []
+        const uids = (await c.search(criteria, { uid: true })) || []
+        if (!uids.length) return []
+        // Attachments and categories are checked after fetching, so look at more than will be shown.
+        const newest = uids.sort((a, b) => b - a).slice(0, check ? limit * 4 : limit)
+        const rows = await this.fetchSummaries(c, accountId, box, newest.join(','), true)
+        return check ? rows.filter((m) => keepImap(query, m)) : rows
+      })
+      found.push(...list)
+    }
+    return found.sort((a, b) => b.date.localeCompare(a.date)).slice(0, limit)
+  }
+
+  /** The folders a structured search looks in: the open one, or the account's folder with that role. */
+  private async queryFolders(accountId: string, path: string, query: MailQuery, gmail: boolean): Promise<string[]> {
+    const folder = query.folder
+    if (!folder) return [path]
+    if (folder === 'inbox') {
+      await this.specialPath(accountId, 'inbox')
+      return [this.inboxOf(accountId)]
+    }
+    if (folder === 'all') {
+      const all = await this.specialPath(accountId, 'all')
+      if (all) return [all]
+      if (gmail) return [path]
+      const paths = [this.inboxOf(accountId), await this.specialPath(accountId, 'archive'), await this.specialPath(accountId, 'sent')]
+      return [...new Set(paths.filter((p): p is string => !!p))]
+    }
+    const special = await this.specialPath(accountId, folder)
+    return special ? [special] : []
   }
 
   /** The whole Gmail conversation, including your replies, from All Mail. */

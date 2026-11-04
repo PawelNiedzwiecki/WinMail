@@ -4,6 +4,7 @@ import {
   type Account,
   type FailedSend,
   type MailboxInfo,
+  type MailQuery,
   type MessageDetail,
   type MessageSummary,
   type OutboxEvent,
@@ -34,7 +35,8 @@ export function createMockApi(): WinMailApi {
     if (offline) throw new Error('Server not found. Check the host name.')
   }
   let settings: Settings = { ...DEFAULT_SETTINGS }
-  let aiKey: string | null = null
+  /** `?ai`: a Claude key is already saved, so AI search and summaries show. */
+  let aiKey: string | null = params.has('ai') ? 'mock-key' : null
   let scheduled: (ScheduledInfo & { input: SendInput })[] = []
   const scheduledListeners = new Set<() => void>()
   const scheduledChanged = () => scheduledListeners.forEach((cb) => cb())
@@ -309,6 +311,17 @@ export function createMockApi(): WinMailApi {
         .slice(0, limit)
         .map(summary)
     },
+    async searchQuery(id, mailbox, q, limit = 60) {
+      await unreachable(300)
+      const places = q.folder
+        ? (boxes[id] ?? []).filter((b) => (q.folder === 'all' ? b.specialUse !== 'trash' && b.specialUse !== 'junk' : b.specialUse === q.folder)).map((b) => b.path)
+        : [mailbox]
+      return messages
+        .filter((m) => m.accountId === id && places.includes(m.mailbox) && matchesQuery(m, q))
+        .sort((a, b) => b.date.localeCompare(a.date))
+        .slice(0, limit)
+        .map(summary)
+    },
     async listThread() {
       return []
     },
@@ -507,6 +520,11 @@ export function createMockApi(): WinMailApi {
         ? `• ${input.subject}\n• Mock summary of a message from ${input.from}.`
         : 'Thanks, that works for me. See you then.'
     },
+    async aiSearch(question) {
+      await sleep(700)
+      if (!aiKey) throw new Error('Add a Claude API key in Settings > General first.')
+      return mockParse(question)
+    },
     async contactsStatus(id) {
       const google = accounts.find((a) => a.id === id)?.provider === 'gmail'
       return { source: google ? 'Google Contacts' : 'iCloud Contacts', saved: 3, fromMail: 2, error: null, loading: false }
@@ -568,4 +586,70 @@ export function createMockApi(): WinMailApi {
     }
   }
   return api
+}
+
+const lower = (s: string) => s.toLowerCase()
+const has = (hay: string[], needle: string) => hay.some((h) => lower(h).includes(lower(needle)))
+
+/** Mock mode's stand-in for IMAP SEARCH. */
+function matchesQuery(m: MessageDetail, q: MailQuery): boolean {
+  const day = localDay(new Date(m.date))
+  if (q.from.length && !q.from.some((f) => has([m.from.name, m.from.email], f))) return false
+  if (q.to.length && !q.to.some((t) => has(m.to.flatMap((a) => [a.name, a.email]), t))) return false
+  if (!q.subject.every((w) => has([m.subject], w))) return false
+  if (!q.words.every((w) => has([m.subject, m.text ?? '', m.from.name, m.from.email], w))) return false
+  if (q.after && day < q.after) return false
+  if (q.before && day > q.before) return false
+  if (q.read && m.seen !== (q.read === 'read')) return false
+  if (q.flagged && !m.flagged) return false
+  if (q.hasAttachment && !m.hasAttachments) return false
+  if (q.category && (m.category ?? 'primary') !== q.category) return false
+  return true
+}
+
+function localDay(d: Date): string {
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
+}
+
+/** Mock mode's stand-in for Claude: picks out a few phrases so the chips have something to show. */
+function mockParse(question: string): MailQuery {
+  const t = lower(question)
+  const now = new Date()
+  const dayOf = (y: number, m: number, d: number) => localDay(new Date(y, m, d))
+  const today = localDay(now)
+  const monday = new Date(now.getFullYear(), now.getMonth(), now.getDate() - ((now.getDay() + 6) % 7))
+  let after: string | null = null
+  let before: string | null = null
+  if (t.includes('last month')) {
+    after = dayOf(now.getFullYear(), now.getMonth() - 1, 1)
+    before = dayOf(now.getFullYear(), now.getMonth(), 0)
+  } else if (t.includes('this month')) {
+    after = dayOf(now.getFullYear(), now.getMonth(), 1)
+    before = today
+  } else if (t.includes('last week')) {
+    after = dayOf(monday.getFullYear(), monday.getMonth(), monday.getDate() - 7)
+    before = dayOf(monday.getFullYear(), monday.getMonth(), monday.getDate() - 1)
+  } else if (t.includes('this week')) {
+    after = localDay(monday)
+    before = today
+  } else if (t.includes('today')) {
+    after = before = today
+  }
+  const from = /\bfrom ([\w.@-]+)/.exec(t)?.[1]
+  const about = /\babout (?:the )?([\w-]+)/.exec(t)?.[1]
+  const topic = ['invoice', 'receipt', 'statement', 'hike', 'review'].filter((w) => t.includes(w))
+  return {
+    from: from ? [from[0]!.toUpperCase() + from.slice(1)] : [],
+    to: [],
+    subject: [],
+    words: [...new Set([...(about ? [about] : []), ...topic])],
+    after,
+    before,
+    read: t.includes('unread') ? 'unread' : null,
+    flagged: /flagged|starred|important/.test(t),
+    hasAttachment: /attach/.test(t),
+    category: /newsletter|promotion/.test(t) ? 'promotions' : null,
+    folder: /\b(i sent|sent)\b/.test(t) ? 'sent' : /anywhere|everywhere|all mail/.test(t) ? 'all' : null
+  }
 }

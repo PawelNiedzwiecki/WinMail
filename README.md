@@ -13,7 +13,7 @@ yarn build      # production build into out/
 yarn dist:win   # Windows installer into dist/ (run on Windows)
 ```
 
-Open `out/renderer/index.html` through a local server in a plain browser to get a mock mode with fake accounts (`?empty` starts with none).
+Open `out/renderer/index.html` through a local server in a plain browser to get a mock mode with fake accounts (`?empty` starts with none, `?ai` acts as if a Claude key were saved).
 
 ## Accounts
 
@@ -68,7 +68,7 @@ Existing app-password Google accounts can switch with **Sign in with Google…**
 - One-click unsubscribe banner for mailing lists; Print and Show Original from the message's ··· menu; Mark All as Read on a folder's right-click menu
 - Windows notifications for new mail while WinMail is in the background; click one to open the message
 - Scheduled list in the sidebar to edit or cancel scheduled mail
-- Optional Claude features with your own API key (Settings > General): Summarise a message, Suggest a reply
+- Optional Claude features with your own API key (Settings > General): Summarise a message, Suggest a reply, AI search (ask for mail in plain language with the sparkle in the search box, or start with `?`)
 - HTML mail sanitised with DOMPurify in a sandboxed iframe; remote images blocked until you allow them
 - Attachments in received mail: click to save
 - Windows 11 Mica sidebar, native window buttons, light and dark mode

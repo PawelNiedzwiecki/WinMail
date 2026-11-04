@@ -458,6 +458,166 @@ body.resizing iframe {
   color: var(--text);
 }
 
+/* AI search: the sparkle switches the box to asking Claude; the box widens and takes an accent tint. */
+.search.is-ai {
+  width: 340px;
+  background: color-mix(in srgb, var(--accent) 9%, var(--input-bg));
+  color: var(--accent);
+}
+.search-ai {
+  width: 20px;
+  height: 20px;
+  margin-left: -3px;
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  border-radius: 6px;
+  color: var(--text-3);
+}
+.search-ai:hover {
+  background: var(--hover);
+  color: var(--accent);
+}
+.search-ai[aria-pressed='true'] {
+  color: var(--accent);
+}
+.search-ai.is-busy svg {
+  animation: ai-pulse 1s ease-in-out infinite alternate;
+}
+@keyframes ai-pulse {
+  from {
+    opacity: 1;
+    transform: scale(1);
+  }
+  to {
+    opacity: 0.45;
+    transform: scale(0.85);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .search-ai.is-busy svg {
+    animation: none;
+    opacity: 0.6;
+  }
+}
+
+/* Under the list header during an AI search: the question, then what Claude searched for as chips. */
+.ai-bar {
+  margin: 10px 12px 8px;
+  padding: 8px 10px 9px;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--accent) 7%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent) 18%, transparent);
+}
+.ai-bar-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--accent);
+  font-size: 11.5px;
+}
+.ai-bar-question {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-2);
+}
+.ai-bar-close {
+  width: 18px;
+  height: 18px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  color: var(--text-3);
+}
+.ai-bar-close:hover {
+  background: var(--hover);
+  color: var(--text);
+}
+.ai-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin-top: 7px;
+}
+.ai-chip {
+  display: inline-flex;
+  align-items: center;
+  max-width: 100%;
+  height: 22px;
+  border-radius: 11px;
+  background: var(--control-bg);
+  border: 1px solid var(--control-border);
+  font-size: 11.5px;
+  color: var(--text);
+}
+.ai-chip-body {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  height: 100%;
+  padding: 0 2px 0 9px;
+  border-radius: 11px 0 0 11px;
+  color: inherit;
+  font: inherit;
+}
+.ai-chip-body:not(:disabled):hover .ai-chip-value {
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.ai-chip-body:disabled {
+  cursor: default;
+  opacity: 1;
+}
+.ai-chip-label {
+  color: var(--text-2);
+}
+.ai-chip-value {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 550;
+}
+.ai-chip-x {
+  width: 18px;
+  height: 18px;
+  margin-right: 2px;
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  border-radius: 50%;
+  color: var(--text-3);
+}
+.ai-chip-x:hover {
+  background: var(--hover);
+  color: var(--text);
+}
+.ai-chip.is-editing {
+  gap: 4px;
+  padding: 0 4px 0 9px;
+  border-color: var(--accent);
+}
+.ai-chip-input {
+  min-width: 0;
+  max-width: 220px;
+  height: 18px;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-weight: 550;
+  color-scheme: light dark;
+}
+.ai-chip-none {
+  font-size: 11.5px;
+  color: var(--text-2);
+}
+
 /* ---------- Message list ---------- */
 .list {
   width: var(--list-w, 340px);

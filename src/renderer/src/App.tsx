@@ -28,6 +28,7 @@ import {
   type Account,
   type GmailCategory,
   type MailboxInfo,
+  type MailQuery,
   type InviteAnswer,
   type MessageDetail,
   type MessageSummary,
@@ -43,6 +44,7 @@ import { Sidebar, inboxPath, type Selection } from './components/Sidebar'
 import { MessageList } from './components/MessageList'
 import { MessageView } from './components/MessageView'
 import { Toolbar } from './components/Toolbar'
+import { AiSearchBar } from './components/AiSearchBar'
 import { ActionBar } from './components/ActionBar'
 import { ComposeDock } from './components/compose/ComposeDock'
 import { ComposeContext } from './compose/ComposeContext'
@@ -248,6 +250,11 @@ export default function App() {
   /** Server search results; null while the search box is empty. */
   const [searchResults, setSearchResults] = useState<MessageSummary[] | null>(null)
   const [searching, setSearching] = useState(false)
+  /** The search box asks Claude (Enter) instead of searching as you type. */
+  const [aiMode, setAiMode] = useState(false)
+  /** The question Claude last answered and the search it made of it, edited through the chips. */
+  const [aiSearch, setAiSearch] = useState<{ question: string; query: MailQuery } | null>(null)
+  const [asking, setAsking] = useState(false)
   const [dialog, setDialog] = useState<Dialog | null>(null)
   const [scheduled, setScheduled] = useState<ScheduledInfo[]>([])
   /** Messages of the open Gmail conversation from other folders, e.g. your replies in Sent. */
@@ -558,6 +565,7 @@ export default function App() {
   // Server search: the loaded list is filtered at once, then the server is asked for older matches.
   const searchReq = useRef(0)
   useEffect(() => {
+    if (aiMode) return
     const q = query.trim()
     const req = ++searchReq.current
     if (q.length < 2) {
@@ -582,7 +590,63 @@ export default function App() {
       setSearching(false)
     }, SEARCH_DELAY_MS)
     return () => window.clearTimeout(t)
-  }, [query, selection, enabledKey])
+  }, [query, selection, enabledKey, aiMode])
+
+  // AI search: Claude's query (or the chips' edit of it) runs on the server, in the same places as a search.
+  useEffect(() => {
+    if (!aiMode) return
+    // Shares the counter with the search above, so a search still running when the mode changed is ignored.
+    const req = ++searchReq.current
+    if (!aiSearch) {
+      setSearchResults(null)
+      setSearching(false)
+      return
+    }
+    const { selection: sel, accounts: list, mailboxes: boxes } = latest.current
+    const targets =
+      sel.kind === 'mailbox'
+        ? [{ accountId: sel.accountId, path: sel.path }]
+        : list.filter((a) => a.enabled).map((a) => ({ accountId: a.id, path: inboxPath(boxes[a.id]) }))
+    setSearching(true)
+    void Promise.allSettled(targets.map((x) => api.searchQuery(x.accountId, x.path, aiSearch.query, PAGE))).then((settled) => {
+      if (req !== searchReq.current) return
+      const found = settled.flatMap((s) => (s.status === 'fulfilled' ? s.value : []))
+      const failed = settled.find((s): s is PromiseRejectedResult => s.status === 'rejected')
+      if (failed && !found.length) showError(failed.reason)
+      found.sort((a, b) => b.date.localeCompare(a.date))
+      setSearchResults(found)
+      setSearching(false)
+    })
+  }, [aiSearch, aiMode, selection, enabledKey])
+
+  const askReq = useRef(0)
+  const askClaude = () => {
+    const question = query.trim()
+    if (!question || asking) return
+    const req = ++askReq.current
+    setAsking(true)
+    api
+      .aiSearch(question)
+      .then((q) => req === askReq.current && setAiSearch({ question, query: q }))
+      .catch(showError)
+      .finally(() => req === askReq.current && setAsking(false))
+  }
+  const switchAiMode = (on: boolean) => {
+    ++askReq.current
+    setAsking(false)
+    setAiSearch(null)
+    setSearchResults(null)
+    setAiMode(on)
+  }
+  const onQuery = (q: string) => {
+    setQuery(q)
+    // Clearing the box ends the AI search and brings the mailbox back; the mode stays for the next question.
+    if (!q.trim() && aiMode) {
+      ++askReq.current
+      setAsking(false)
+      setAiSearch(null)
+    }
+  }
 
   // Periodic check
   useEffect(() => {
@@ -620,13 +684,15 @@ export default function App() {
   // ---------- Selection & detail ----------
 
   const visible = useMemo(() => {
+    // A question isn't a filter; the list changes once Claude has answered.
+    if (aiMode) return aiSearch ? (searchResults ?? []) : messages
     const q = query.trim().toLowerCase()
     if (!q) return messages
     if (searchResults) return searchResults
     return messages.filter((m) =>
       [m.from.name, m.from.email, m.subject, m.preview].some((s) => s.toLowerCase().includes(q))
     )
-  }, [messages, query, searchResults])
+  }, [messages, query, searchResults, aiMode, aiSearch])
 
   /** Conversations, when grouping is on; each message key maps to its conversation. */
   const threads = useMemo(() => {
@@ -653,6 +719,7 @@ export default function App() {
     category ?? '',
     query.trim(),
     searchResults ? 'server' : '',
+    aiSearch ? `ai:${JSON.stringify(aiSearch.query)}` : '',
     unreadOnly ? 'unread' : ''
   ].join('|')
 
@@ -1180,6 +1247,10 @@ export default function App() {
       .then(setAiAvailable)
       .catch(() => setAiAvailable(false))
   }, [settingsTab])
+  // The key was removed in Settings: back to normal search.
+  useEffect(() => {
+    if (!aiAvailable && aiMode) switchAiMode(false)
+  }, [aiAvailable])
 
   // ---------- Keyboard ----------
 
@@ -1333,7 +1404,9 @@ export default function App() {
 
   const plural = (n: number) => `${n} new ${n === 1 ? 'message' : 'messages'}`
   const downloading = Object.values(incoming).reduce((a, b) => a + b, 0)
-  const status = searching
+  const status = asking
+    ? { busy: true, text: 'Asking Claude…' }
+    : searching
     ? { busy: true, text: 'Searching the server…' }
     : downloading
     ? { busy: true, text: `Downloading ${plural(downloading)}…` }
@@ -1365,7 +1438,12 @@ export default function App() {
           hasAccounts={enabled.length > 0}
           refreshing={refreshing}
           query={query}
-          onQuery={setQuery}
+          onQuery={onQuery}
+          aiAvailable={aiAvailable}
+          aiMode={aiMode}
+          onAiMode={switchAiMode}
+          onAsk={askClaude}
+          asking={asking}
           onRefresh={() => refresh(false)}
           onCompose={newMessage}
         />
@@ -1382,16 +1460,30 @@ export default function App() {
               selectedKey={selectedKey}
               checkedKeys={checked}
               threadCounts={threadCounts}
-              tabs={categoryTabs}
+              tabs={
+                aiSearch ? (
+                  <AiSearchBar
+                    question={aiSearch.question}
+                    query={aiSearch.query}
+                    onChange={(q) => setAiSearch({ ...aiSearch, query: q })}
+                    onClose={() => {
+                      switchAiMode(false)
+                      setQuery('')
+                    }}
+                  />
+                ) : (
+                  categoryTabs
+                )
+              }
               view={listView}
               unreadOnly={unreadOnly}
               onUnreadOnly={setUnreadOnly}
-              loading={!ready || listLoading}
+              loading={!ready || listLoading || (!!aiSearch && !searchResults)}
               switching={listSwitching}
               status={status}
               error={listError}
               accountLabels={labels}
-              hasMore={hasMore && !searchResults}
+              hasMore={hasMore && !searchResults && !aiSearch}
               draftKeys={draftKeys}
               onSelect={onSelectRow}
               onOpen={(key) => {

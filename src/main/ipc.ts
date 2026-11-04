@@ -5,6 +5,7 @@ import type {
   AccountUpdate,
   AiInput,
   InviteAnswer,
+  MailQuery,
   MoveTarget,
   SendInput,
   Settings
@@ -15,7 +16,7 @@ import type { MailCache } from './cache'
 import { cancelSignIn, revoke } from './google'
 import type { Contacts } from './contacts'
 import type { Outbox } from './outbox'
-import { runAi } from './ai'
+import { askSearch, runAi } from './ai'
 import { AttachmentGrants, TEMP_ROOT, saveTempFile } from './attachments'
 
 type Handler = (...args: never[]) => unknown
@@ -103,6 +104,7 @@ export function registerIpc(store: Store, mail: MailService, contacts: Contacts,
   handle('mail:mailboxes', (id: string) => mail.listMailboxes(id))
   handle('mail:messages', (id: string, path: string, limit?: number) => mail.listMessages(id, path, limit))
   handle('mail:search', (id: string, path: string, q: string, limit?: number) => mail.search(id, path, q, limit))
+  handle('mail:searchQuery', (id: string, path: string, q: MailQuery, limit?: number) => mail.searchQuery(id, path, q, limit))
   handle('mail:thread', (id: string, threadId: string) => mail.listThread(id, threadId))
   // Read from the copy on this PC; no connection is made.
   handle('mail:cachedMailboxes', (id: string) => cache.mailboxes(id))
@@ -200,6 +202,7 @@ export function registerIpc(store: Store, mail: MailService, contacts: Contacts,
   handle('ai:available', () => store.hasAiKey())
   handle('ai:setKey', (key: string | null) => store.setAiKey(key?.trim() || null))
   handle('ai:run', (input: AiInput) => runAi(store, input))
+  handle('ai:search', (question: string) => askSearch(store, question))
 
   handle('contacts:list', (id: string) => contacts.list(id))
   handle('contacts:status', (id: string) => contacts.status(id))

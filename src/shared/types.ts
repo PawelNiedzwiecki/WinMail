@@ -261,6 +261,34 @@ export interface AiInput {
   text: string
 }
 
+/** Where a `MailQuery` looks, by folder role; null in the query means the open mailbox. */
+export type MailQueryFolder = 'inbox' | 'sent' | 'drafts' | 'archive' | 'junk' | 'trash' | 'all'
+
+/**
+ * A structured search: what Claude made of a question like "invoices from Northwind last month", and what the
+ * chips under the search box edit. Empty lists and nulls match everything; everything set must match.
+ */
+export interface MailQuery {
+  /** Sender names, addresses or domains; any of them. */
+  from: string[]
+  /** Recipient names, addresses or domains; any of them. */
+  to: string[]
+  /** Words or phrases that must all be in the subject. */
+  subject: string[]
+  /** Words or phrases that must all appear somewhere in the message. */
+  words: string[]
+  /** First day included, YYYY-MM-DD in the user's time zone. */
+  after: string | null
+  /** Last day included, YYYY-MM-DD. */
+  before: string | null
+  read: 'unread' | 'read' | null
+  /** Only flagged (starred) messages. */
+  flagged: boolean
+  hasAttachment: boolean
+  category: GmailCategory | null
+  folder: MailQueryFolder | null
+}
+
 export type Appearance = 'system' | 'light' | 'dark'
 
 /** How message bodies are drawn; 'app' follows the app's appearance. */
@@ -382,6 +410,11 @@ export interface WinMailApi {
   listMessages(accountId: string, mailbox: string, limit?: number): Promise<MessageSummary[]>
   /** Server-side search; on Google accounts `query` accepts Gmail operators. Newest first. */
   search(accountId: string, mailbox: string, query: string, limit?: number): Promise<MessageSummary[]>
+  /**
+   * Runs a structured query: Gmail operators on Google accounts, IMAP SEARCH elsewhere. `mailbox` is searched
+   * unless `query.folder` names another folder of the account. Newest first.
+   */
+  searchQuery(accountId: string, mailbox: string, query: MailQuery, limit?: number): Promise<MessageSummary[]>
   /** Every message of a Gmail conversation, from All Mail. Empty on other providers. */
   listThread(accountId: string, threadId: string): Promise<MessageSummary[]>
   getMessage(accountId: string, mailbox: string, uid: number, uidValidity?: string): Promise<MessageDetail>
@@ -443,6 +476,8 @@ export interface WinMailApi {
   /** Saves the key (encrypted), or removes it with null. */
   setAiKey(key: string | null): Promise<void>
   ai(input: AiInput): Promise<string>
+  /** Turns a question about the user's mail into a structured query with Claude. Sends only the question. */
+  aiSearch(question: string): Promise<MailQuery>
 
   /** The account's address book plus people from its mail, best match first. */
   listContacts(accountId: string): Promise<Contact[]>
