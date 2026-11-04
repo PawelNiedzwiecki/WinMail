@@ -8,3 +8,9 @@ interface ImportMeta {
 }
 
 declare module '*.css' {}
+
+declare module '*?asset' {
+  /** Absolute path to the file, copied beside the main bundle at build time. */
+  const path: string
+  export default path
+}

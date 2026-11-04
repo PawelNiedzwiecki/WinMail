@@ -21,6 +21,8 @@ import { Notifier } from './notifications'
 import { cleanTemp } from './attachments'
 import { loadWindowState, trackWindowState } from './windowState'
 import type { MessageSummary, OpenMessageEvent } from '../shared/types'
+// Copied next to the build output, so it is there in dev and in the installed app alike.
+import appIcon from '../../build/icon.ico?asset'
 
 const CONTACTS_SCAN_DELAY_MS = 20_000
 /** How often snoozed mail and scheduled sends are checked. */
@@ -215,6 +217,7 @@ function createWindow(): BrowserWindow {
     titleBarOverlay: isWin ? overlay() : undefined,
     backgroundMaterial: mica ? 'mica' : undefined,
     backgroundColor: mica ? '#00000000' : undefined,
+    icon: appIcon,
     webPreferences: webPreferences()
   })
 
@@ -267,6 +270,7 @@ function childWindow(title: string, size: ChildSize, index: number): BrowserWind
     titleBarOverlay: isWin ? overlay(size.bar) : undefined,
     backgroundMaterial: mica ? 'mica' : undefined,
     backgroundColor: mica ? '#00000000' : undefined,
+    icon: appIcon,
     webPreferences: webPreferences()
   })
 }
