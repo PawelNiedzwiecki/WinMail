@@ -3,6 +3,8 @@ import {
   DEFAULT_SETTINGS,
   type Account,
   type FailedSend,
+  type LabelColour,
+  type LabelInfo,
   type MailboxInfo,
   type MailQuery,
   type MessageDetail,
@@ -30,6 +32,8 @@ export function createMockApi(): WinMailApi {
   /** `?nocache`: nothing is saved on this PC yet (first launch). `?offline`: the server cannot be reached. */
   const noCache = params.has('nocache')
   const offline = params.has('offline')
+  /** `?nolabels`: the iCloud server refuses keywords, so labels can't be stored there. */
+  const noLabels = params.has('nolabels')
   const unreachable = async (ms: number) => {
     await sleep(ms)
     if (offline) throw new Error('Server not found. Check the host name.')
@@ -94,9 +98,20 @@ export function createMockApi(): WinMailApi {
       { path: '[Gmail]/Spam', name: 'Junk', specialUse: 'junk', unseen: 0, depth: 0 },
       { path: '[Gmail]/Bin', name: 'Bin', specialUse: 'trash', unseen: 0, depth: 0 },
       { path: '[Gmail]/All Mail', name: 'All Mail', specialUse: 'all', unseen: 0, depth: 0 },
+      { path: 'Receipts', name: 'Receipts', specialUse: null, unseen: 0, depth: 0 },
+      { path: 'Travel', name: 'Travel', specialUse: null, unseen: 0, depth: 0 },
       { path: 'Work', name: 'Work', specialUse: null, unseen: 0, depth: 0 }
     ]
   }
+  /** Names and colours kept "on this PC"; keyword accounts also remember keywords created here. */
+  const labelStyles: Record<string, Record<string, { name?: string; colour?: LabelColour; deleted?: boolean }>> = {
+    icloud: { $label3: { colour: 'green' } },
+    gmail: { Work: { colour: 'blue' }, Receipts: { colour: 'teal' }, Travel: { colour: 'pink' } }
+  }
+  const isGmail = (id: string) => accounts.find((a) => a.id === id)?.provider === 'gmail'
+  /** A Gmail folder that is a label rather than a system folder. */
+  const isLabelBox = (id: string, path: string) =>
+    isGmail(id) && (boxes[id] ?? []).some((b) => b.path === path && !b.specialUse)
 
   let uid = 100
   const msg = (
@@ -138,24 +153,25 @@ export function createMockApi(): WinMailApi {
 
   let messages: MessageDetail[] = [
     msg('icloud', 'INBOX', ['Jamie Rivera', 'jamie.rivera@example.com'], 'Saturday hike',
-      'Hey,\n\nThe trail opens at 9. Shall we meet at the car park at 8:30? I can drive.\n\nJamie', 40, { flagged: true }),
+      'Hey,\n\nThe trail opens at 9. Shall we meet at the car park at 8:30? I can drive.\n\nJamie', 40, { flagged: true, labels: ['$label3'] }),
     // A reply to the message above, so the list shows a conversation.
     msg('icloud', 'INBOX', ['Jamie Rivera', 'jamie.rivera@example.com'], 'Re: Saturday hike',
       'Actually 9:00 works better, the car park opens late. Still fine for you?\n\nJamie', 8, { parents: [`<${uid}@mock>`] }),
     msg('gmail', 'INBOX', ['Northwind Bank', 'statements@northwind.example'], 'Your monthly statement is ready',
       'Hi Alex, your statement for this month is now available in the app.', 12, {
         html: '<div style="font-family:sans-serif;max-width:560px"><h2 style="color:#14233c">Your statement is ready</h2><p>Hi Alex,</p><p>Your statement for this month is now available in the app. <a href="https://northwind.example">Open Northwind</a></p><img src="https://example.com/tracker.png" width="1" height="1"></div>',
-        unsubscribe: { url: 'https://northwind.example/unsubscribe', oneClick: true }
+        unsubscribe: { url: 'https://northwind.example/unsubscribe', oneClick: true },
+        labels: ['Receipts']
       }),
     msg('gmail', 'INBOX', ['GitHub', 'noreply@github.com'], '[sample-app] PR #42: Offline caching',
       'Review requested. 14 files changed, 612 additions, 88 deletions.\n\nhttps://github.com/example/sample-app/pull/42', 300, {
-        seen: true, hasAttachments: true,
+        seen: true, hasAttachments: true, labels: ['Work'],
         attachments: [{ index: 0, filename: 'diff-summary.txt', contentType: 'text/plain', size: 4096 }]
       }),
     msg('icloud', 'INBOX', ['City Transit', 'journeys@citytransit.example'], 'Your weekly journey summary',
-      'You travelled 9 times this week.\n\nTotal charged: £27.40', 60 * 26, { seen: true }),
+      'You travelled 9 times this week.\n\nTotal charged: £27.40', 60 * 26, { seen: true, labels: ['$label4', '$label2'] }),
     msg('gmail', 'INBOX', ['Taylor, Contoso Careers', 'careers@contoso.example'], 'Frontend Engineer role',
-      'Hi Alex,\n\nI came across your profile and think you could be a great fit. Hybrid, two days in the office.\n\nTaylor', 60 * 50, { seen: true, flagged: true }),
+      'Hi Alex,\n\nI came across your profile and think you could be a great fit. Hybrid, two days in the office.\n\nTaylor', 60 * 50, { seen: true, flagged: true, labels: ['Work', 'Travel'] }),
     msg('gmail', 'INBOX', ['Jamie Rivera', 'jamie.rivera@example.com'], 'Invitation: Design review',
       'Jamie Rivera has invited you to Design review.\n\nWalk through the new compose, then questions.', 25, {
         invite: {
@@ -177,7 +193,7 @@ export function createMockApi(): WinMailApi {
         }
       }),
     msg('icloud', 'Receipts', ['Fabrikam Store', 'orders@fabrikam.example'], 'Your receipt from Fabrikam',
-      'Thanks for your purchase.', 60 * 24 * 9, { seen: true })
+      'Thanks for your purchase.', 60 * 24 * 9, { seen: true, labels: ['$label1'] })
   ]
   // A reply to the first message, so conversations have something to group.
   messages.push(
@@ -207,9 +223,33 @@ export function createMockApi(): WinMailApi {
   }
 
   const find = (accountId: string, mailbox: string, u: number) => {
-    const m = messages.find((x) => x.accountId === accountId && x.mailbox === mailbox && x.uid === u)
+    // A Gmail label folder lists the messages carrying the label, wherever they are.
+    const m = isLabelBox(accountId, mailbox)
+      ? messages.find((x) => x.accountId === accountId && x.uid === u)
+      : messages.find((x) => x.accountId === accountId && x.mailbox === mailbox && x.uid === u)
     if (!m) throw new Error('Message not found.')
     return m
+  }
+
+  /** Messages listed in a folder; a Gmail label folder shows every message with that label. */
+  const inBox = (id: string, mailbox: string): MessageDetail[] =>
+    isLabelBox(id, mailbox)
+      ? messages
+          .filter((m) => m.accountId === id && m.labels?.includes(mailbox))
+          .map((m) => ({ ...m, mailbox, key: `${id}|${mailbox}|${m.uid}` }))
+      : messages.filter((m) => m.accountId === id && m.mailbox === mailbox)
+
+  const MOCK_DEFAULTS: { id: string; name: string; colour: LabelColour }[] = [
+    { id: '$label1', name: 'Important', colour: 'red' },
+    { id: '$label2', name: 'Work', colour: 'orange' },
+    { id: '$label3', name: 'Personal', colour: 'green' },
+    { id: '$label4', name: 'To Do', colour: 'blue' },
+    { id: '$label5', name: 'Later', colour: 'purple' }
+  ]
+  const labelInfo = (accountId: string, id: string): LabelInfo => {
+    const st = labelStyles[accountId]?.[id] ?? {}
+    const d = MOCK_DEFAULTS.find((x) => x.id === id)
+    return { id, name: st.name ?? d?.name ?? id, colour: st.colour ?? d?.colour ?? 'grey' }
   }
 
   const api: WinMailApi = {
@@ -283,9 +323,7 @@ export function createMockApi(): WinMailApi {
     },
     async cachedList(id, mailbox, limit, view) {
       if (noCache) return null
-      const all = messages
-        .filter((m) => m.accountId === id && m.mailbox === mailbox)
-        .sort((a, b) => b.date.localeCompare(a.date))
+      const all = inBox(id, mailbox).sort((a, b) => b.date.localeCompare(a.date))
       const list = (view ? all.filter((m) => m.category === view.replace('category:', '')) : all).slice(0, limit)
       return { messages: list.map((m) => ({ ...summary(m), uidValidity: '1' })), more: all.length > limit }
     },
@@ -295,8 +333,7 @@ export function createMockApi(): WinMailApi {
     async clearCache() {},
     async listMessages(id, mailbox, limit = 60) {
       await unreachable(120)
-      return messages
-        .filter((m) => m.accountId === id && m.mailbox === mailbox)
+      return inBox(id, mailbox)
         .sort((a, b) => b.date.localeCompare(a.date))
         .slice(0, limit)
         .map(summary)
@@ -304,8 +341,7 @@ export function createMockApi(): WinMailApi {
     async search(id, mailbox, q, limit = 60) {
       await unreachable(300)
       const needle = q.replace(/category:\w+\s*/, '').toLowerCase()
-      return messages
-        .filter((m) => m.accountId === id && m.mailbox === mailbox)
+      return inBox(id, mailbox)
         .filter((m) => [m.from.name, m.from.email, m.subject, m.text].some((s) => s.toLowerCase().includes(needle)))
         .sort((a, b) => b.date.localeCompare(a.date))
         .slice(0, limit)
@@ -314,16 +350,85 @@ export function createMockApi(): WinMailApi {
     async searchQuery(id, mailbox, q, limit = 60) {
       await unreachable(300)
       const places = q.folder
-        ? (boxes[id] ?? []).filter((b) => (q.folder === 'all' ? b.specialUse !== 'trash' && b.specialUse !== 'junk' : b.specialUse === q.folder)).map((b) => b.path)
+        ? (boxes[id] ?? []).filter((b) => (q.folder === 'all' ? b.specialUse !== 'trash' && b.specialUse !== 'junk' && !isLabelBox(id, b.path) : b.specialUse === q.folder)).map((b) => b.path)
         : [mailbox]
-      return messages
-        .filter((m) => m.accountId === id && places.includes(m.mailbox) && matchesQuery(m, q))
+      return places
+        .flatMap((p) => inBox(id, p))
+        .filter((m) => matchesQuery(m, q))
         .sort((a, b) => b.date.localeCompare(a.date))
         .slice(0, limit)
         .map(summary)
     },
     async listThread() {
       return []
+    },
+    async listLabels(id) {
+      await unreachable(60)
+      const styles = (labelStyles[id] ??= {})
+      if (isGmail(id)) {
+        const labels = (boxes[id] ?? []).filter((b) => !b.specialUse).map((b) => labelInfo(id, b.path))
+        return { support: 'gmail', labels: labels.sort((a, b) => a.name.localeCompare(b.name)) }
+      }
+      if (noLabels && id === 'icloud') return { support: 'none', labels: [] }
+      const used = messages.filter((m) => m.accountId === id).flatMap((m) => m.labels ?? [])
+      const ids = [...new Set([...MOCK_DEFAULTS.map((d) => d.id), ...Object.keys(styles), ...used])].filter(
+        (k) => !styles[k]?.deleted
+      )
+      return { support: 'keywords', labels: ids.map((k) => labelInfo(id, k)) }
+    },
+    async setLabels(id, mailbox, uids, change) {
+      await sleep(150)
+      if (noLabels && id === 'icloud') throw new Error("This account's server can't store labels on messages.")
+      for (const u of uids) {
+        const m = find(id, mailbox, u)
+        const next = new Set(m.labels ?? [])
+        for (const l of change.add ?? []) next.add(l)
+        for (const l of change.remove ?? []) next.delete(l)
+        m.labels = [...next].sort()
+      }
+      if (isLabelBox(id, mailbox) && change.remove?.includes(mailbox)) {
+        const all = boxes[id]?.find((b) => b.specialUse === 'all')
+        return all ? { path: all.path, uids } : null
+      }
+      return null
+    },
+    async createLabel(id, name, colour) {
+      await sleep(120)
+      const clean = name.trim()
+      if (!clean) throw new Error('Give the label a name.')
+      const styles = (labelStyles[id] ??= {})
+      if (isGmail(id)) {
+        if (!boxes[id]?.some((b) => b.path === clean)) boxes[id]?.push({ path: clean, name: clean, specialUse: null, unseen: 0, depth: 0 })
+        styles[clean] = { ...styles[clean], colour: colour ?? 'blue' }
+        return labelInfo(id, clean)
+      }
+      const key = clean.toLowerCase().replace(/[^a-z0-9]+/g, '_')
+      styles[key] = { name: clean, colour: colour ?? 'teal' }
+      return labelInfo(id, key)
+    },
+    async updateLabel(id, label, patch) {
+      await sleep(120)
+      const styles = (labelStyles[id] ??= {})
+      let key = label
+      if (patch.name && isGmail(id) && patch.name !== label) {
+        key = patch.name.trim()
+        const b = boxes[id]?.find((x) => x.path === label)
+        if (b) Object.assign(b, { path: key, name: key })
+        for (const m of messages) if (m.accountId === id && m.labels) m.labels = m.labels.map((l) => (l === label ? key : l))
+        styles[key] = { ...styles[label] }
+        delete styles[label]
+      } else if (patch.name) styles[key] = { ...styles[key], name: patch.name.trim() }
+      if (patch.colour) styles[key] = { ...styles[key], colour: patch.colour }
+      return labelInfo(id, key)
+    },
+    async deleteLabel(id, label) {
+      await sleep(200)
+      for (const m of messages) if (m.accountId === id && m.labels) m.labels = m.labels.filter((l) => l !== label)
+      const styles = (labelStyles[id] ??= {})
+      if (isGmail(id)) {
+        boxes[id] = (boxes[id] ?? []).filter((b) => b.path !== label)
+        delete styles[label]
+      } else styles[label] = { deleted: true }
     },
     async getMessage(id, mailbox, u) {
       await sleep(60)
@@ -604,6 +709,7 @@ function matchesQuery(m: MessageDetail, q: MailQuery): boolean {
   if (q.flagged && !m.flagged) return false
   if (q.hasAttachment && !m.hasAttachments) return false
   if (q.category && (m.category ?? 'primary') !== q.category) return false
+  if (q.labels?.some((l) => !m.labels?.includes(l))) return false
   return true
 }
 

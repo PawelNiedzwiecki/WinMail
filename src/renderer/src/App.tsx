@@ -26,7 +26,10 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, typ
 import {
   DEFAULT_SETTINGS,
   type Account,
+  type AccountLabels,
   type GmailCategory,
+  type LabelChange,
+  type LabelInfo,
   type MailboxInfo,
   type MailQuery,
   type InviteAnswer,
@@ -70,6 +73,8 @@ import { Welcome } from './components/Welcome'
 import { ContextMenu, type MenuItem } from './components/ContextMenu'
 import { ToastStack } from './components/ToastStack'
 import { FolderPicker } from './components/FolderPicker'
+import { LabelPicker } from './components/LabelPicker'
+import { labelsFor } from './components/LabelChips'
 import { WhenPicker } from './components/WhenPicker'
 import { ConfirmDeleteDialog } from './components/ConfirmDeleteDialog'
 import { SourceDialog } from './components/SourceDialog'
@@ -155,7 +160,12 @@ function forgetFolder(accountId: string, path: string) {
 
 /** Identifies one message list: what is selected, the inbox tab, and which accounts it spans. */
 function listKeyOf(sel: Selection, list: Account[], cat: GmailCategory | null): string {
-  const where = sel.kind === 'mailbox' ? `${sel.accountId}/${sel.path}` : `all:${list.filter((a) => a.enabled).map((a) => a.id).join(',')}`
+  const where =
+    sel.kind === 'mailbox'
+      ? `${sel.accountId}/${sel.path}`
+      : sel.kind === 'label'
+        ? `label:${sel.accountId}/${sel.id}`
+        : `all:${list.filter((a) => a.enabled).map((a) => a.id).join(',')}`
   return `${where}|${cat ?? ''}`
 }
 
@@ -174,6 +184,43 @@ function cacheDetail(d: MessageDetail) {
   if (detailCache.size > DETAIL_CACHE_MAX) detailCache.delete(detailCache.keys().next().value!)
 }
 
+/** Every message with a label, wherever it is filed: the label views of keyword accounts. */
+function labelQuery(id: string, base?: MailQuery): MailQuery {
+  return {
+    from: [],
+    to: [],
+    subject: [],
+    words: [],
+    after: null,
+    before: null,
+    read: null,
+    flagged: false,
+    hasAttachment: false,
+    category: null,
+    ...base,
+    folder: base?.folder ?? 'all',
+    labels: [...new Set([...(base?.labels ?? []), id])]
+  }
+}
+
+/** The message with a label change applied. */
+function relabel<T extends MessageSummary>(m: T, change: LabelChange): T {
+  const next = new Set(m.labels ?? [])
+  for (const l of change.add ?? []) next.add(l)
+  for (const l of change.remove ?? []) next.delete(l)
+  return { ...m, labels: [...next].sort() }
+}
+
+/** How a label change reads in a toast: "“Work” added to 3 messages". */
+function labelToast(change: LabelChange, n: number, name: (id: string) => string): string {
+  const add = change.add ?? []
+  const remove = change.remove ?? []
+  const what = n === 1 ? '' : ` ${n} messages`
+  if (add.length === 1 && !remove.length) return `“${name(add[0]!)}” added${what ? ` to${what}` : ''}`
+  if (remove.length === 1 && !add.length) return `“${name(remove[0]!)}” removed${what ? ` from${what}` : ''}`
+  return n === 1 ? 'Labels changed' : `Labels changed on${what}`
+}
+
 const MOVED: Record<MoveTarget, string> = {
   trash: 'deleted',
   archive: 'archived',
@@ -183,6 +230,7 @@ const MOVED: Record<MoveTarget, string> = {
 
 type Dialog =
   | { kind: 'move'; items: MessageSummary[] }
+  | { kind: 'labels'; items: MessageSummary[] }
   | { kind: 'snooze'; items: MessageSummary[] }
   | { kind: 'delete'; items: MessageSummary[] }
   | { kind: 'source'; subject: string; source: string }
@@ -207,6 +255,8 @@ export default function App() {
   const [accounts, setAccounts] = useState<Account[]>([])
   const [settings, setSettings] = useState<Settings>(DEFAULT_SETTINGS)
   const [mailboxes, setMailboxes] = useState<Record<string, MailboxInfo[]>>({})
+  /** accountId -> its labels and whether its server can keep them. */
+  const [labelSets, setLabelSets] = useState<Record<string, AccountLabels>>({})
   const [accountErrors, setAccountErrors] = useState<Record<string, string>>({})
 
   const [selection, setSelection] = useState<Selection>({ kind: 'all-inboxes' })
@@ -276,6 +326,18 @@ export default function App() {
     return list
   }, [])
 
+  /** Labels follow the folder list: Gmail labels are folders, and keyword support is read from the inbox. */
+  const loadLabels = useCallback(async (accountId: string): Promise<AccountLabels | null> => {
+    try {
+      const set = await api.listLabels(accountId)
+      setLabelSets((all) => ({ ...all, [accountId]: set }))
+      return set
+    } catch {
+      // Offline with nothing saved: chips fall back to plain names until the server answers.
+      return null
+    }
+  }, [])
+
   const loadMailboxes = useCallback(async (list: Account[]) => {
     await Promise.all(
       list
@@ -288,9 +350,10 @@ export default function App() {
           } catch (e) {
             setAccountErrors((x) => ({ ...x, [a.id]: errMsg(e) }))
           }
+          await loadLabels(a.id)
         })
     )
-  }, [])
+  }, [loadLabels])
 
   /** The lists the selection spans, as saved on this PC; null unless every one of them is saved. */
   const savedList = useCallback(
@@ -299,6 +362,8 @@ export default function App() {
         const got = await cachedBox(list.find((a) => a.id === sel.accountId), sel.path, max, cat, sel.accountId)
         return got && { result: got.items, more: got.raw >= max, byAccount: { [sel.accountId]: got.items } }
       }
+      // A label view is a search across folders; nothing of it is saved.
+      if (sel.kind === 'label') return null
       const targets = list.filter((a) => a.enabled)
       const got = await Promise.all(targets.map((a) => cachedBox(a, inboxPath(boxes[a.id]), max, cat)))
       if (!targets.length || got.some((g) => !g)) return null
@@ -370,6 +435,9 @@ export default function App() {
             return painted?.[a.id] ?? latest.current.messages.filter((m) => m.accountId === a.id && m.mailbox === inbox)
           })
           result.sort((a, b) => b.date.localeCompare(a.date))
+        } else if (sel.kind === 'label') {
+          result = await api.searchQuery(sel.accountId, inboxPath(boxes[sel.accountId]), labelQuery(sel.id), max)
+          more = result.length >= max
         } else {
           const got = await fetchBox(list.find((a) => a.id === sel.accountId), sel.path, max, cat, sel.accountId)
           result = got.items
@@ -400,8 +468,8 @@ export default function App() {
   )
 
   // Keep latest values for callbacks that run from timers/events.
-  const latest = useRef({ selection, accounts, mailboxes, limit, category, messages })
-  latest.current = { selection, accounts, mailboxes, limit, category, messages }
+  const latest = useRef({ selection, accounts, mailboxes, limit, category, messages, searchResults })
+  latest.current = { selection, accounts, mailboxes, limit, category, messages, searchResults }
 
   /** `only` limits the folder-count reload to accounts that reported a change. */
   const refresh = useCallback(
@@ -573,8 +641,15 @@ export default function App() {
       setSearching(false)
       return
     }
+    // A label view is already a search across folders; typing narrows it here.
+    if (selection.kind === 'label') {
+      setSearchResults(null)
+      setSearching(false)
+      return
+    }
     const t = window.setTimeout(async () => {
       const { selection: sel, accounts: list, mailboxes: boxes } = latest.current
+      if (sel.kind === 'label') return
       const targets =
         sel.kind === 'mailbox'
           ? [{ accountId: sel.accountId, path: sel.path }]
@@ -603,12 +678,15 @@ export default function App() {
       return
     }
     const { selection: sel, accounts: list, mailboxes: boxes } = latest.current
+    // In a label view the question is asked of that label's messages.
     const targets =
       sel.kind === 'mailbox'
-        ? [{ accountId: sel.accountId, path: sel.path }]
-        : list.filter((a) => a.enabled).map((a) => ({ accountId: a.id, path: inboxPath(boxes[a.id]) }))
+        ? [{ accountId: sel.accountId, path: sel.path, query: aiSearch.query }]
+        : sel.kind === 'label'
+          ? [{ accountId: sel.accountId, path: inboxPath(boxes[sel.accountId]), query: labelQuery(sel.id, aiSearch.query) }]
+          : list.filter((a) => a.enabled).map((a) => ({ accountId: a.id, path: inboxPath(boxes[a.id]), query: aiSearch.query }))
     setSearching(true)
-    void Promise.allSettled(targets.map((x) => api.searchQuery(x.accountId, x.path, aiSearch.query, PAGE))).then((settled) => {
+    void Promise.allSettled(targets.map((x) => api.searchQuery(x.accountId, x.path, x.query, PAGE))).then((settled) => {
       if (req !== searchReq.current) return
       const found = settled.flatMap((s) => (s.status === 'fulfilled' ? s.value : []))
       const failed = settled.find((s): s is PromiseRejectedResult => s.status === 'rejected')
@@ -709,13 +787,18 @@ export default function App() {
       const t = threads.get(m.key)
       if (!t || t.members.length === 1) return [m]
       if (t.latest.key !== m.key) return []
-      return [{ ...m, seen: t.members.every((x) => x.seen), flagged: t.members.some((x) => x.flagged) }]
+      const labels = [...new Set(t.members.flatMap((x) => x.labels ?? []))].sort()
+      return [{ ...m, seen: t.members.every((x) => x.seen), flagged: t.members.some((x) => x.flagged), labels }]
     })
   }, [visible, threads, settings.conversations])
 
   /** What the list shows (folder, category, search); when it changes, rows swap without animating. */
   const listView = [
-    selection.kind === 'mailbox' ? `${selection.accountId}/${selection.path}` : 'all',
+    selection.kind === 'mailbox'
+      ? `${selection.accountId}/${selection.path}`
+      : selection.kind === 'label'
+        ? `label:${selection.accountId}/${selection.id}`
+        : 'all',
     category ?? '',
     query.trim(),
     searchResults ? 'server' : '',
@@ -982,6 +1065,143 @@ export default function App() {
     }
   }
 
+  // ---------- Labels ----------
+
+  const labelSupport = (accountId: string) => labelSets[accountId]?.support
+  const labelName = (accountId: string, id: string) =>
+    labelSets[accountId]?.labels.find((l) => l.id === id)?.name ?? id
+
+  /** Puts labels on messages and takes them off. Shown at once, rolled back with an error if the server refuses. */
+  const applyLabels = async (items: MessageSummary[], change: LabelChange, undoable = true): Promise<boolean> => {
+    const add = change.add ?? []
+    const remove = change.remove ?? []
+    const changed = items.filter(
+      (m) => add.some((l) => !m.labels?.includes(l)) || remove.some((l) => m.labels?.includes(l))
+    )
+    if (!changed.length) return true
+    const before = new Map(changed.map((m) => [m.key, m.labels]))
+    const keys = new Set(before.keys())
+    const patch = (fn: <T extends MessageSummary>(m: T) => T) => {
+      mapLists((list) => list.map((m) => (keys.has(m.key) ? fn(m) : m)))
+      setDetail((d) => (d && keys.has(d.key) ? fn(d) : d))
+      setDialog((d) => (d?.kind === 'labels' ? { ...d, items: d.items.map((m) => (keys.has(m.key) ? fn(m) : m)) } : d))
+      for (const k of keys) {
+        const c = detailCache.get(k)
+        if (c) detailCache.set(k, fn(c))
+      }
+    }
+    const restore = <T extends MessageSummary>(m: T): T => ({ ...m, labels: before.get(m.key) })
+    // Rows the change takes out of the list: a label view losing its label, or a Gmail label folder losing its own.
+    const sel = latest.current.selection
+    const leaves = (m: MessageSummary) =>
+      (sel.kind === 'label' && sel.accountId === m.accountId && remove.includes(sel.id)) ||
+      (labelSupport(m.accountId) === 'gmail' && remove.includes(m.mailbox))
+    const gone = changed.filter(leaves)
+    patch((m) => relabel(m, change))
+    if (gone.length) takeOut(gone)
+    const moved: { accountId: string; res: MoveResult }[] = []
+    try {
+      for (const g of byFolder(changed)) {
+        const res = await api.setLabels(g.accountId, g.mailbox, g.uids, change, g.uidValidity)
+        if (res && res.uids.length) moved.push({ accountId: g.accountId, res })
+      }
+    } catch (e) {
+      patch(restore)
+      if (gone.length) putBack(gone.map(restore))
+      showError(e)
+      return false
+    }
+    if (!undoable) return true
+    const accountId = changed[0]!.accountId
+    const inverse: LabelChange = { add: remove, remove: add }
+    const undo = async () => {
+      lastUndo.current = null
+      try {
+        // Messages that left their folder (a Gmail label taken off in its own folder) are found where they went.
+        const left = new Set(moved.length ? gone.map((m) => m.key) : [])
+        for (const g of byFolder(changed.filter((m) => !left.has(m.key)))) {
+          await api.setLabels(g.accountId, g.mailbox, g.uids, inverse, g.uidValidity)
+        }
+        for (const d of moved) await api.setLabels(d.accountId, d.res.path, d.res.uids, inverse, d.res.uidValidity)
+        patch(restore)
+        if (gone.length && !moved.length) putBack(gone.map(restore))
+        if (moved.length) void refresh(true, new Set(changed.map((m) => m.accountId)))
+        toast('Labels undone')
+      } catch (e) {
+        showError(e)
+        void refresh(true, new Set(changed.map((m) => m.accountId)))
+      }
+    }
+    lastUndo.current = undo
+    labelToastId.current = toast({
+      id: labelToastId.current ?? undefined,
+      text: labelToast(change, changed.length, (id) => labelName(accountId, id)),
+      actions: [{ label: 'Undo', run: () => void undo() }]
+    })
+    return true
+  }
+  /** One toast for a run of changes in the label picker, so ticking several labels doesn't stack them up. */
+  const labelToastId = useRef<number | null>(null)
+
+  const askLabels = (items = targets()) => {
+    if (!oneAccount(items)) return
+    const accountId = items[0]!.accountId
+    if (!labelSets[accountId]) void loadLabels(accountId)
+    labelToastId.current = null
+    setDialog({ kind: 'labels', items })
+  }
+
+  /** Shows every message with a label: on Gmail that is the label's own folder, elsewhere a label view. */
+  const openLabel = (accountId: string, label: LabelInfo) => {
+    onQuery('')
+    if (labelSupport(accountId) === 'gmail') select({ kind: 'mailbox', accountId, path: label.id })
+    else select({ kind: 'label', accountId, id: label.id })
+  }
+
+  /** A label was made, renamed, recoloured or deleted in Settings or the picker. */
+  const labelsChanged = async (accountId: string, reloadList = true) => {
+    const gmail = labelSupport(accountId) === 'gmail'
+    // Gmail labels are folders: the folder list changes with them.
+    let boxes = latest.current.mailboxes[accountId]
+    if (gmail) {
+      try {
+        boxes = await api.listMailboxes(accountId)
+        setMailboxes((m) => ({ ...m, [accountId]: boxes! }))
+      } catch (e) {
+        showError(e)
+      }
+    }
+    const set = await loadLabels(accountId)
+    const sel = latest.current.selection
+    // The label on screen is gone (deleted, or renamed on Gmail): back to the inboxes.
+    if (set && sel.kind === 'label' && sel.accountId === accountId && !set.labels.some((l) => l.id === sel.id)) {
+      select({ kind: 'all-inboxes' })
+    } else if (
+      gmail &&
+      sel.kind === 'mailbox' &&
+      sel.accountId === accountId &&
+      !boxes?.some((b) => b.path === sel.path)
+    ) {
+      select({ kind: 'all-inboxes' })
+    } else if (reloadList) {
+      // Renames and deletions change what saved rows carry.
+      void loadMessages(sel, latest.current.accounts, latest.current.mailboxes, true, latest.current.limit, latest.current.category)
+    }
+  }
+
+  const createAndApply = async (items: MessageSummary[], name: string) => {
+    const accountId = items[0]?.accountId
+    if (!accountId) return
+    try {
+      const label = await api.createLabel(accountId, name)
+      // A new label is on no message yet, so the list needn't be read again (that could race the change below).
+      await labelsChanged(accountId, false)
+      await applyLabels(items, { add: [label.id] })
+    } catch (e) {
+      showError(e)
+    }
+  }
+
   /** Move to… lists one account's folders, so the selection must be in one account. */
   const oneAccount = (items: MessageSummary[]) => items.length > 0 && items.every((m) => m.accountId === items[0]!.accountId)
   const askMove = (items = targets()) => oneAccount(items) && setDialog({ kind: 'move', items })
@@ -994,7 +1214,7 @@ export default function App() {
   const askSnooze =(items = targets()) => items.length && setDialog({ kind: 'snooze', items })
 
   const defaultAccountId = () => {
-    if (selection.kind === 'mailbox') return selection.accountId
+    if (selection.kind !== 'all-inboxes') return selection.accountId
     return enabled[0]?.id ?? ''
   }
 
@@ -1124,6 +1344,9 @@ export default function App() {
       : []),
     'separator',
     { label: 'Move to…', icon: <FolderInput size={14} />, shortcut: settings.gmailShortcuts ? 'V' : undefined, onSelect: () => askMove() },
+    ...(selected && labelSupport(selected.accountId) !== 'none'
+      ? [{ label: 'Labels…', icon: <Tag size={14} />, shortcut: settings.gmailShortcuts ? 'L' : undefined, onSelect: () => askLabels() }]
+      : []),
     { label: 'Snooze…', icon: <AlarmClock size={14} />, shortcut: settings.gmailShortcuts ? 'B' : undefined, onSelect: () => askSnooze() }
   ]
 
@@ -1184,6 +1407,17 @@ export default function App() {
         disabled: !oneAccount(items),
         onSelect: () => askMove(items)
       },
+      ...(items.some((x) => labelSupport(x.accountId) !== 'none')
+        ? [
+            {
+              label: 'Labels…',
+              icon: <Tag size={14} />,
+              shortcut: settings.gmailShortcuts ? 'L' : undefined,
+              disabled: !oneAccount(items),
+              onSelect: () => askLabels(items)
+            }
+          ]
+        : []),
       { label: 'Snooze…', icon: <AlarmClock size={14} />, onSelect: () => askSnooze(items) },
       { label: 'Move to Junk', icon: <ShieldAlert size={14} />, onSelect: () => moveMessages(items, 'junk') },
       { label: 'Delete', icon: <Trash2 size={14} />, shortcut: 'Del', danger: true, onSelect: () => askTrash(items) }
@@ -1347,6 +1581,7 @@ export default function App() {
       else if (isKey(e, { key: 'x' })) run(() => selectedKey && markRow(selectedKey))
       else if (isKey(e, { key: 'b' })) run(() => askSnooze())
       else if (isKey(e, { key: 'v' })) run(() => askMove())
+      else if (isKey(e, { key: 'l' })) run(() => askLabels())
       else if (isKey(e, { key: 'z' })) run(() => lastUndo.current?.())
       else if (isKey(e, { key: 'c' })) run(newMessage)
       else if (isKey(e, { code: 'Slash' })) run(() => document.getElementById('search')?.focus())
@@ -1362,8 +1597,22 @@ export default function App() {
       ? enabled.length > 1
         ? 'All Inboxes'
         : 'Inbox'
-      : (src(selection)?.name ?? selection.path)
-  const subtitle = selection.kind === 'mailbox' ? accountById[selection.accountId]?.description : undefined
+      : selection.kind === 'label'
+        ? labelName(selection.accountId, selection.id)
+        : (src(selection)?.name ?? selection.path)
+  const subtitle = selection.kind !== 'all-inboxes' ? accountById[selection.accountId]?.description : undefined
+  // The label the list is about isn't repeated on every row.
+  const hideLabel =
+    selection.kind === 'label'
+      ? selection.id
+      : selection.kind === 'mailbox' && labelSupport(selection.accountId) === 'gmail' && !src(selection)?.specialUse
+        ? selection.path
+        : undefined
+  const selectedLabels = selected
+    ? labelsFor({ ...selected, labels: [...new Set(withThread([selected]).flatMap((m) => m.labels ?? []))] }, labelSets)
+    : []
+  const canLabelSelected = !!selected && !multi && !!labelSets[selected.accountId] && labelSupport(selected.accountId) !== 'none'
+  const anyLabels = enabled.some((a) => labelSupport(a.id) !== undefined && labelSupport(a.id) !== 'none')
   const labels =
     selection.kind === 'all-inboxes' && enabled.length > 1
       ? Object.fromEntries(enabled.map((a) => [a.id, a.description]))
@@ -1431,6 +1680,7 @@ export default function App() {
         scheduledCount={scheduled.length}
         onOpenScheduled={() => setDialog({ kind: 'scheduled' })}
         onMailboxMenu={(accountId, path, x, y) => setBoxMenu({ accountId, path, x, y })}
+        labelSets={labelSets}
       />
       <Resizer width={sidebarW} onResize={setSidebarW} onReset={resetSidebarW} label="Resize sidebar" />
       <div className="content">
@@ -1493,6 +1743,9 @@ export default function App() {
                 else api.openMessageWindow(m).catch(showError)
               }}
               onContextMenu={(key, x, y) => setMenu({ key, x, y })}
+              labelSets={labelSets}
+              hideLabel={hideLabel}
+              onOpenLabel={openLabel}
               onLoadMore={() => {
                 const next = limit + PAGE
                 setLimit(next)
@@ -1516,6 +1769,8 @@ export default function App() {
               onForward={() => respond('forward')}
               onFlag={() => toggleFlag()}
               onToggleRead={() => toggleSeen()}
+              onLabels={anyLabels ? () => askLabels() : undefined}
+              canLabel={oneAccount(targets()) && labelSupport(targets()[0]!.accountId) !== 'none'}
             />
             <MessageView
               summary={selected}
@@ -1537,6 +1792,12 @@ export default function App() {
               onUnsubscribe={unsubscribe}
               onAnswerInvite={answerInvite}
               onOpenInvite={openInvite}
+              labels={selectedLabels}
+              onEditLabels={canLabelSelected ? () => askLabels() : undefined}
+              onOpenLabel={(l) => selected && openLabel(selected.accountId, l)}
+              onRemoveLabel={
+                canLabelSelected ? (l) => selected && void applyLabels(withThread([selected]), { remove: [l.id] }) : undefined
+              }
             />
             </div>
           </div>
@@ -1557,6 +1818,8 @@ export default function App() {
             onAddAccount={() => setAdding(true)}
             onAccountsChanged={accountsChanged}
             onSettings={updateSettings}
+            labelSets={labelSets}
+            onLabelsChanged={labelsChanged}
           />
         )}
       </AnimatePresence>
@@ -1597,6 +1860,23 @@ export default function App() {
             mailboxes={mailboxes[dialog.items[0]!.accountId] ?? []}
             current={dialog.items[0]!.mailbox}
             onPick={(path) => void moveMessages(dialog.items, { path })}
+            onClose={() => setDialog(null)}
+          />
+        )}
+        {dialog?.kind === 'labels' && (
+          <LabelPicker
+            key="labels"
+            labels={labelSets[dialog.items[0]!.accountId] ?? null}
+            items={dialog.items}
+            onToggle={(label, on) => {
+              const items = dialog.items
+              void applyLabels(items, on ? { add: [label.id] } : { remove: [label.id] })
+            }}
+            onCreate={(name) => createAndApply(dialog.items, name)}
+            onManage={() => {
+              setDialog(null)
+              setSettingsTab('labels')
+            }}
             onClose={() => setDialog(null)}
           />
         )}

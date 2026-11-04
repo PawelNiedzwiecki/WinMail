@@ -5,7 +5,7 @@ import { join } from 'path'
 import type { MailboxInfo, MessageDetail, MessageSummary } from '../shared/types'
 
 /** Bumped when the tables change; an older file is rebuilt, a newer one is thrown away. */
-const SCHEMA_VERSION = 2
+const SCHEMA_VERSION = 3
 
 /** Opened messages larger than this (inline images make some huge) are not kept. */
 export const BODY_MAX_BYTES = 5_000_000
@@ -63,6 +63,23 @@ export interface CachedWindow {
   messages: MessageSummary[]
   more: boolean
   uidValidity: string
+}
+
+/** A saved message list row as read from `messages`. */
+interface MessageRow {
+  uid: number
+  seen: number
+  flagged: number
+  labels: string | null
+  summary: string
+}
+
+/** Current flags of one message from a sync; `labels` is left out when the server was not asked for them. */
+export interface FlagRow {
+  uid: number
+  seen: boolean
+  flagged: boolean
+  labels?: string[]
 }
 
 /** The folder changed under a sync (trim, clear, reset); its write is dropped. */
@@ -137,8 +154,14 @@ export class MailCache {
     if (version === SCHEMA_VERSION) return
     db.exec('BEGIN')
     try {
-      // Version 1 has everything but the drafts table.
-      db.exec(version === 0 ? SCHEMA + DRAFTS : DRAFTS)
+      // Version 1 has everything but the drafts table; version 2 everything but messages.labels.
+      if (version === 0) db.exec(SCHEMA + DRAFTS)
+      else {
+        if (version < 2) db.exec(DRAFTS)
+        db.exec(LABELS)
+        // Saved rows have no labels yet: the next sync of every folder reads all flags (and labels) again.
+        db.exec('UPDATE folders SET modseq = NULL')
+      }
       db.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`)
       db.exec('COMMIT')
     } catch (err) {
@@ -229,9 +252,10 @@ export class MailCache {
     this.stmts.clear()
   }
 
-  private static summary(row: { uid: number; seen: number; flagged: number; summary: string }, a: string, p: string, validity: string) {
+  private static summary(row: MessageRow, a: string, p: string, validity: string) {
     return {
       ...(JSON.parse(row.summary) as MessageSummary),
+      labels: MailCache.labelsOf(row.labels),
       key: `${a}|${p}|${row.uid}`,
       accountId: a,
       mailbox: p,
@@ -244,8 +268,23 @@ export class MailCache {
 
   /** What is stored in `messages.summary`: everything that is not a column or derived from one. */
   private static pack(m: MessageSummary): string {
-    const { key: _k, accountId: _a, mailbox: _m, uid: _u, seen: _s, flagged: _f, ...rest } = m
+    const { key: _k, accountId: _a, mailbox: _m, uid: _u, seen: _s, flagged: _f, labels: _l, ...rest } = m
     return JSON.stringify(rest)
+  }
+
+  /** `messages.labels`: a JSON list, or NULL for rows saved before labels were read. */
+  private static labelsOf(json: string | null): string[] | undefined {
+    if (json === null) return undefined
+    try {
+      const v = JSON.parse(json) as unknown
+      return Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : undefined
+    } catch {
+      return undefined
+    }
+  }
+
+  private static labelsJson(labels: string[] | undefined): string | null {
+    return labels ? JSON.stringify([...new Set(labels)].sort()) : null
   }
 
   private adjustUnseen(a: string, p: string, delta: number): void {
@@ -376,8 +415,8 @@ export class MailCache {
         p
       )
       if (!f || f.floor_uid === null || f.uid_validity === null) return null
-      const rows = this.all<{ uid: number; seen: number; flagged: number; summary: string }>(
-        'SELECT uid, seen, flagged, summary FROM messages WHERE account_id = ? AND path = ? AND uid >= ? ORDER BY uid DESC LIMIT ?',
+      const rows = this.all<MessageRow>(
+        'SELECT uid, seen, flagged, labels, summary FROM messages WHERE account_id = ? AND path = ? AND uid >= ? ORDER BY uid DESC LIMIT ?',
         a,
         p,
         f.floor_uid,
@@ -413,12 +452,13 @@ export class MailCache {
         }
         for (const m of rows) {
           this.run(
-            'INSERT OR REPLACE INTO messages (account_id, path, uid, seen, flagged, date, summary) VALUES (?, ?, ?, ?, ?, ?, ?)',
+            'INSERT OR REPLACE INTO messages (account_id, path, uid, seen, flagged, labels, date, summary) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
             a,
             p,
             m.uid,
             m.seen ? 1 : 0,
             m.flagged ? 1 : 0,
+            MailCache.labelsJson(m.labels),
             m.date,
             MailCache.pack(m)
           )
@@ -452,7 +492,7 @@ export class MailCache {
     sync: {
       upsert: MessageSummary[]
       remove: number[]
-      flags: { uid: number; seen: boolean; flagged: boolean }[]
+      flags: FlagRow[]
       floor: number
       snap: SnapState
     }
@@ -463,25 +503,38 @@ export class MailCache {
         if (sync.remove.length) this.drop(a, p, sync.remove, false)
         for (const m of sync.upsert) {
           this.run(
-            'INSERT OR REPLACE INTO messages (account_id, path, uid, seen, flagged, date, summary) VALUES (?, ?, ?, ?, ?, ?, ?)',
+            'INSERT OR REPLACE INTO messages (account_id, path, uid, seen, flagged, labels, date, summary) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
             a,
             p,
             m.uid,
             m.seen ? 1 : 0,
             m.flagged ? 1 : 0,
+            MailCache.labelsJson(m.labels),
             m.date,
             MailCache.pack(m)
           )
         }
         for (const f of sync.flags) {
-          this.run(
-            'UPDATE messages SET seen = ?, flagged = ? WHERE account_id = ? AND path = ? AND uid = ?',
-            f.seen ? 1 : 0,
-            f.flagged ? 1 : 0,
-            a,
-            p,
-            f.uid
-          )
+          if (f.labels) {
+            this.run(
+              'UPDATE messages SET seen = ?, flagged = ?, labels = ? WHERE account_id = ? AND path = ? AND uid = ?',
+              f.seen ? 1 : 0,
+              f.flagged ? 1 : 0,
+              MailCache.labelsJson(f.labels),
+              a,
+              p,
+              f.uid
+            )
+          } else {
+            this.run(
+              'UPDATE messages SET seen = ?, flagged = ? WHERE account_id = ? AND path = ? AND uid = ?',
+              f.seen ? 1 : 0,
+              f.flagged ? 1 : 0,
+              a,
+              p,
+              f.uid
+            )
+          }
         }
         this.run(
           `UPDATE folders SET uid_validity = ?, uid_next = ?, messages = ?, modseq = ?, floor_uid = ?, visited_at = ?
@@ -551,6 +604,41 @@ export class MailCache {
           unseen += row.seen - seen
         }
         this.adjustUnseen(a, p, unseen)
+      })
+      return true
+    })
+  }
+
+  /** Labels added to and taken off messages of the folder, once the server has confirmed it. */
+  setLabels(a: string, p: string, uids: number[], change: { add?: string[]; remove?: string[] }): boolean {
+    return this.guard(false, true, () => {
+      this.tx(() => {
+        for (const uid of uids) {
+          const row = this.get<{ labels: string | null }>('SELECT labels FROM messages WHERE account_id = ? AND path = ? AND uid = ?', a, p, uid)
+          if (!row) continue
+          const next = new Set(MailCache.labelsOf(row.labels) ?? [])
+          for (const l of change.add ?? []) next.add(l)
+          for (const l of change.remove ?? []) next.delete(l)
+          this.run('UPDATE messages SET labels = ? WHERE account_id = ? AND path = ? AND uid = ?', MailCache.labelsJson([...next]), a, p, uid)
+        }
+      })
+      return true
+    })
+  }
+
+  /** A label renamed (`to`) or deleted (null) on the server: every saved message of the account follows. */
+  relabelAll(a: string, from: string, to: string | null): boolean {
+    return this.guard(false, true, () => {
+      this.tx(() => {
+        const rows = this.all<{ path: string; uid: number; labels: string }>(
+          `SELECT path, uid, labels FROM messages WHERE account_id = ? AND labels IS NOT NULL AND labels LIKE ? ESCAPE '!'`,
+          a,
+          `%${JSON.stringify(from).replace(/[!%_]/g, '!$&')}%`
+        )
+        for (const r of rows) {
+          const list = (MailCache.labelsOf(r.labels) ?? []).map((l) => (l === from ? to : l)).filter((l): l is string => l !== null)
+          this.run('UPDATE messages SET labels = ? WHERE account_id = ? AND path = ? AND uid = ?', MailCache.labelsJson(list), a, r.path, r.uid)
+        }
       })
       return true
     })
@@ -663,8 +751,8 @@ export class MailCache {
         uid
       )
       if (!b || b.uid_validity === null) return null
-      const m = this.get<{ seen: number; flagged: number }>(
-        'SELECT seen, flagged FROM messages WHERE account_id = ? AND path = ? AND uid = ?',
+      const m = this.get<{ seen: number; flagged: number; labels: string | null }>(
+        'SELECT seen, flagged, labels FROM messages WHERE account_id = ? AND path = ? AND uid = ?',
         a,
         p,
         uid
@@ -674,6 +762,7 @@ export class MailCache {
       if (m) {
         detail.seen = true
         detail.flagged = !!m.flagged
+        detail.labels = MailCache.labelsOf(m.labels) ?? detail.labels
       }
       return { detail, uidValidity: b.uid_validity, wasSeen: m ? !!m.seen : true }
     })
@@ -685,13 +774,13 @@ export class MailCache {
       const v = this.get<{ rows: string }>('SELECT rows FROM views WHERE account_id = ? AND path = ? AND name = ?', a, p, name)
       if (!v) return null
       return (JSON.parse(v.rows) as MessageSummary[]).map((r) => {
-        const m = this.get<{ seen: number; flagged: number }>(
-          'SELECT seen, flagged FROM messages WHERE account_id = ? AND path = ? AND uid = ?',
+        const m = this.get<{ seen: number; flagged: number; labels: string | null }>(
+          'SELECT seen, flagged, labels FROM messages WHERE account_id = ? AND path = ? AND uid = ?',
           a,
           p,
           r.uid
         )
-        return m ? { ...r, seen: !!m.seen, flagged: !!m.flagged } : r
+        return m ? { ...r, seen: !!m.seen, flagged: !!m.flagged, labels: MailCache.labelsOf(m.labels) ?? r.labels } : r
       })
     })
   }
@@ -853,6 +942,11 @@ export class MailCache {
   }
 }
 
+/** Version 3: labels (Gmail labels or IMAP keywords) of each saved message, as a JSON list. */
+const LABELS = `
+ALTER TABLE messages ADD COLUMN labels TEXT;
+`
+
 const DRAFTS = `
 CREATE TABLE drafts (
   account_id TEXT NOT NULL,
@@ -885,6 +979,7 @@ CREATE TABLE messages (
   uid        INTEGER NOT NULL,
   seen       INTEGER NOT NULL,
   flagged    INTEGER NOT NULL,
+  labels     TEXT,
   date       TEXT NOT NULL,
   summary    TEXT NOT NULL,
   PRIMARY KEY (account_id, path, uid),

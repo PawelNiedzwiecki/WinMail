@@ -17,10 +17,14 @@ import {
   type LucideIcon
 } from 'lucide-react'
 import { useState, type ReactNode } from 'react'
-import type { Account, MailboxInfo, SpecialUse } from '@shared/types'
+import type { Account, AccountLabels, LabelColour, MailboxInfo, SpecialUse } from '@shared/types'
 import { Collapse } from './Collapse'
 
-export type Selection = { kind: 'all-inboxes' } | { kind: 'mailbox'; accountId: string; path: string }
+/** What the list shows: every inbox, one folder, or (keyword accounts) every message with a label. */
+export type Selection =
+  | { kind: 'all-inboxes' }
+  | { kind: 'mailbox'; accountId: string; path: string }
+  | { kind: 'label'; accountId: string; id: string }
 
 const ICONS: Record<SpecialUse, LucideIcon> = {
   inbox: Inbox,
@@ -50,6 +54,8 @@ interface Props {
   onOpenScheduled: () => void
   /** Right-click on a mailbox. */
   onMailboxMenu: (accountId: string, path: string, x: number, y: number) => void
+  /** accountId -> labels: Gmail label folders get their colour, keyword accounts a Labels list. */
+  labelSets?: Record<string, AccountLabels>
 }
 
 export function inboxPath(boxes: MailboxInfo[] | undefined): string {
@@ -149,10 +155,14 @@ export function Sidebar(p: Props) {
                   <span key={i} className="skel-line" style={{ width: `${w}%` }} />
                 ))}
               </div>}
-            {p.mailboxes[a.id]?.map((b) => (
+            {p.mailboxes[a.id]?.map((b) => {
+              const set = p.labelSets?.[a.id]
+              const colour = !b.specialUse && set?.support === 'gmail' ? set.labels.find((l) => l.id === b.path)?.colour : undefined
+              return (
               <Item
                 key={b.path}
                 icon={b.specialUse ? ICONS[b.specialUse] : Folder}
+                dot={colour}
                 label={b.name}
                 depth={b.depth}
                 count={COUNTED.has(b.specialUse) ? b.unseen : 0}
@@ -160,7 +170,23 @@ export function Sidebar(p: Props) {
                 onClick={() => p.onSelect({ kind: 'mailbox', accountId: a.id, path: b.path })}
                 onContextMenu={(x, y) => p.onMailboxMenu(a.id, b.path, x, y)}
               />
-            ))}
+              )
+            })}
+            {p.labelSets?.[a.id]?.support === 'keywords' && p.labelSets[a.id]!.labels.length > 0 && (
+              <>
+                <div className="sb-subhead">Labels</div>
+                {p.labelSets[a.id]!.labels.map((l) => (
+                  <Item
+                    key={`label:${l.id}`}
+                    icon={Folder}
+                    dot={l.colour}
+                    label={l.name}
+                    selected={p.selection.kind === 'label' && p.selection.accountId === a.id && p.selection.id === l.id}
+                    onClick={() => p.onSelect({ kind: 'label', accountId: a.id, id: l.id })}
+                  />
+                ))}
+              </>
+            )}
           </Section>
         ))}
       </nav>
@@ -178,6 +204,8 @@ export function Sidebar(p: Props) {
 
 function Item(props: {
   icon: LucideIcon
+  /** A label colour: a coloured tag dot replaces the icon. */
+  dot?: LabelColour
   label: string
   count?: number
   depth?: number
@@ -198,7 +226,13 @@ function Item(props: {
         props.onContextMenu(e.clientX, e.clientY)
       }}
     >
-      <Icon size={16} strokeWidth={1.8} className="sb-icon" />
+      {props.dot ? (
+        <span className="sb-icon sb-label-icon" aria-hidden>
+          <span className={`label-dot lc-${props.dot}`} />
+        </span>
+      ) : (
+        <Icon size={16} strokeWidth={1.8} className="sb-icon" />
+      )}
       <span className="sb-label">{props.label}</span>
       {/* Keyed by the number so it ticks when new mail arrives or a message is read. */}
       {props.count ? (

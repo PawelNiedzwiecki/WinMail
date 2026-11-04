@@ -11,7 +11,8 @@ import {
   MailOpen,
   FolderInput,
   AlarmClock,
-  Ellipsis
+  Ellipsis,
+  Tag
 } from 'lucide-react'
 import { ContextMenu, type MenuItem } from './ContextMenu'
 
@@ -32,6 +33,10 @@ interface Props {
   onForward: () => void
   onFlag: () => void
   onToggleRead: () => void
+  /** Labels…; left out when no account can store labels. */
+  onLabels?: () => void
+  /** Labels need the selection in one account, like Move to…. */
+  canLabel?: boolean
 }
 
 interface Action {
@@ -94,6 +99,9 @@ export function ActionBar(p: Props) {
       run: p.onToggleRead
     },
     { id: 'move', group: 2, hideOrder: 9, title: 'Move to…', label: 'Move to…', icon: <FolderInput size={ICON} />, disabled: d || !p.canMove, run: p.onMove },
+    ...(p.onLabels
+      ? [{ id: 'labels', group: 2, hideOrder: 8.5, title: 'Labels…', label: 'Labels…', icon: <Tag size={ICON} />, disabled: d || !p.canLabel, run: p.onLabels }]
+      : []),
     { id: 'junk', group: 3, hideOrder: 10, title: 'Move to Junk', label: 'Move to Junk', icon: <ShieldAlert size={ICON} />, disabled: d, run: p.onJunk }
   ]
 

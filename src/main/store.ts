@@ -8,6 +8,8 @@ import {
   type AccountInput,
   type AccountUpdate,
   type AuthMethod,
+  type LabelColour,
+  type LabelSupport,
   type OutboxKind,
   type ScheduledInfo,
   type SendInput,
@@ -31,6 +33,23 @@ export interface Scheduled extends ScheduledInfo {
   failed?: boolean
 }
 
+/** What WinMail keeps about one label on this PC. */
+export interface LabelStyle {
+  /** Display name; keywords only (a Gmail label's name is its name on the server). */
+  name?: string
+  colour?: LabelColour
+  /** Deleted in WinMail: a keyword the server still lists, or a default, is not offered again. */
+  deleted?: boolean
+}
+
+/** Labels of one account: what the server allows, keywords seen there, and names and colours set here. */
+export interface AccountLabelStore {
+  support?: LabelSupport
+  /** Keywords the server listed (FLAGS of the inbox), for working offline. */
+  seen?: string[]
+  styles: Record<string, LabelStyle>
+}
+
 /** Secret slot for the Claude API key, next to the account secrets. */
 const AI_SECRET = 'ai:anthropic'
 
@@ -45,6 +64,8 @@ interface StoreFile {
   settings: Settings
   snoozed: Snoozed[]
   scheduled: Scheduled[]
+  /** accountId -> labels; kept apart from `settings` so a settings save from the renderer never overwrites them. */
+  labels: Record<string, AccountLabelStore>
 }
 
 const fresh = (): StoreFile => ({
@@ -53,7 +74,8 @@ const fresh = (): StoreFile => ({
   secrets: {},
   settings: { ...DEFAULT_SETTINGS },
   snoozed: [],
-  scheduled: []
+  scheduled: [],
+  labels: {}
 })
 
 export class Store {
@@ -89,7 +111,8 @@ export class Store {
       secrets: raw.secrets ?? {},
       settings: { ...DEFAULT_SETTINGS, ...raw.settings },
       snoozed: raw.snoozed ?? [],
-      scheduled: raw.scheduled ?? []
+      scheduled: raw.scheduled ?? [],
+      labels: raw.labels ?? {}
     }
   }
 
@@ -147,6 +170,7 @@ export class Store {
     delete this.data.secrets[id]
     this.data.snoozed = this.data.snoozed.filter((x) => x.accountId !== id)
     this.data.scheduled = this.data.scheduled.filter((x) => x.accountId !== id)
+    delete this.data.labels[id]
     this.save()
   }
 
@@ -158,6 +182,17 @@ export class Store {
     this.data.settings = { ...DEFAULT_SETTINGS, ...s }
     this.save()
     return this.data.settings
+  }
+
+  // ---------- Labels ----------
+
+  accountLabels(accountId: string): AccountLabelStore {
+    return this.data.labels[accountId] ?? { styles: {} }
+  }
+
+  setAccountLabels(accountId: string, labels: AccountLabelStore): void {
+    this.data.labels[accountId] = labels
+    this.save()
   }
 
   // ---------- Snoozed and scheduled mail ----------

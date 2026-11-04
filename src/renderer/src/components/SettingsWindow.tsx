@@ -12,13 +12,14 @@ import {
   SlidersHorizontal,
   Sparkles,
   Sun,
+  Tag,
   X,
   type LucideIcon
 } from 'lucide-react'
 import { motion } from 'motion/react'
 import { useEffect, useState, type ReactNode } from 'react'
 import { Backdrop, panelExit, useModalEscape } from './Backdrop'
-import type { Account, Appearance, ComposeFormat, ContactsStatus, ListDensity, MessageAppearance, Settings } from '@shared/types'
+import type { Account, AccountLabels, Appearance, ComposeFormat, ContactsStatus, ListDensity, MessageAppearance, Settings } from '@shared/types'
 import { getProvider } from '@shared/providers'
 import { api } from '../api'
 import { formatSize } from '../format'
@@ -27,8 +28,9 @@ import { ProviderLogo } from './ProviderLogo'
 import { Select } from './Select'
 import { Group, Item, KeyRow, Segmented, Switch } from './settings/controls'
 import { NotificationsPage } from './settings/NotificationsPage'
+import { LabelsPage } from './settings/LabelsPage'
 
-export type SettingsTab = 'general' | 'appearance' | 'notifications' | 'composing' | 'shortcuts' | 'ai' | 'accounts'
+export type SettingsTab = 'general' | 'appearance' | 'notifications' | 'composing' | 'labels' | 'shortcuts' | 'ai' | 'accounts'
 
 interface Props {
   tab: SettingsTab
@@ -39,6 +41,8 @@ interface Props {
   onAddAccount: () => void
   onAccountsChanged: () => void
   onSettings: (s: Settings) => void
+  labelSets: Record<string, AccountLabels>
+  onLabelsChanged: (accountId: string) => Promise<void> | void
 }
 
 const PAGES: { id: SettingsTab; label: string; icon: LucideIcon }[] = [
@@ -46,6 +50,7 @@ const PAGES: { id: SettingsTab; label: string; icon: LucideIcon }[] = [
   { id: 'appearance', label: 'Appearance', icon: Palette },
   { id: 'notifications', label: 'Notifications', icon: Bell },
   { id: 'composing', label: 'Composing', icon: PenLine },
+  { id: 'labels', label: 'Labels', icon: Tag },
   { id: 'shortcuts', label: 'Shortcuts', icon: Keyboard },
   { id: 'ai', label: 'Claude', icon: Sparkles },
   { id: 'accounts', label: 'Accounts', icon: AtSign }
@@ -86,6 +91,9 @@ export function SettingsWindow(p: Props) {
             )}
             {page.id === 'composing' && (
               <ComposingPage settings={p.settings} onChange={p.onSettings} onAccounts={() => p.onTab('accounts')} />
+            )}
+            {page.id === 'labels' && (
+              <LabelsPage accounts={p.accounts} labelSets={p.labelSets} onChanged={p.onLabelsChanged} />
             )}
             {page.id === 'shortcuts' && <ShortcutsPage settings={p.settings} onChange={p.onSettings} />}
             {page.id === 'ai' && <AiPage />}
@@ -342,6 +350,7 @@ function ShortcutsPage({ settings, onChange }: PageProps) {
           <KeyRow keys={[['x']]} action="Select" />
           <KeyRow keys={[['b']]} action="Snooze" />
           <KeyRow keys={[['v']]} action="Move to…" />
+          <KeyRow keys={[['l']]} action="Labels…" />
           <KeyRow keys={[['z']]} action="Undo" />
           <KeyRow keys={[['c']]} action="New message" />
           <KeyRow keys={[['/']]} action="Search" />

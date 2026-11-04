@@ -5,6 +5,8 @@ import type {
   AccountUpdate,
   AiInput,
   InviteAnswer,
+  LabelChange,
+  LabelColour,
   MailQuery,
   MoveTarget,
   SendInput,
@@ -106,6 +108,15 @@ export function registerIpc(store: Store, mail: MailService, contacts: Contacts,
   handle('mail:search', (id: string, path: string, q: string, limit?: number) => mail.search(id, path, q, limit))
   handle('mail:searchQuery', (id: string, path: string, q: MailQuery, limit?: number) => mail.searchQuery(id, path, q, limit))
   handle('mail:thread', (id: string, threadId: string) => mail.listThread(id, threadId))
+  handle('labels:list', (id: string) => mail.listLabels(id))
+  handle('labels:set', (id: string, path: string, uids: number[], change: LabelChange, v?: string) =>
+    mail.setLabels(id, path, uids, change, v)
+  )
+  handle('labels:create', (id: string, name: string, colour?: LabelColour) => mail.createLabel(id, name, colour))
+  handle('labels:update', (id: string, label: string, patch: { name?: string; colour?: LabelColour }) =>
+    mail.updateLabel(id, label, patch)
+  )
+  handle('labels:delete', (id: string, label: string) => mail.deleteLabel(id, label))
   // Read from the copy on this PC; no connection is made.
   handle('mail:cachedMailboxes', (id: string) => cache.mailboxes(id))
   handle('mail:cachedList', (id: string, path: string, limit: number, view?: string) => {
