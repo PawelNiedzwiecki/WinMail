@@ -159,59 +159,212 @@
   outline: none;
 }
 
-/* Picker */
+/* Picker: a quiet command-menu list. One soft highlight follows the pointer or the arrow keys (never both),
+   the tick carries the "applied" state, and nested labels sit indented under their parent. */
 .dialog-labels {
-  width: 340px;
+  width: 360px;
 }
-.label-item .label-dot {
-  width: 9px;
-  height: 9px;
+.dialog-labels .dialog-title {
+  padding: 14px 16px 10px;
+}
+.dialog-labels .dialog-body {
+  display: flex;
+  flex-direction: column;
+  padding: 0;
+  overflow: hidden;
+}
+.label-search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 34px;
+  margin: 0 10px 6px;
+  padding: 0 10px;
+  border-radius: 8px;
+  background: var(--input-bg);
+  color: var(--text-3);
+  box-shadow: inset 0 0 0 1px transparent;
+  transition: box-shadow var(--dur-1) ease, background-color var(--dur-1) ease;
+}
+.label-search:focus-within {
+  background: var(--surface);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 55%, transparent),
+    0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent);
+  color: var(--text-2);
+}
+.label-search input {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  border: none;
+  outline: none;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+}
+.label-search input::placeholder {
+  color: var(--text-3);
+}
+.label-list {
+  max-height: 380px;
+  padding: 2px 6px 8px;
+  border-top: 1px solid var(--hairline);
+  scroll-padding: 6px;
+}
+.label-section {
+  padding: 10px 10px 4px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--text-3);
+}
+.label-section:first-child {
+  padding-top: 8px;
+}
+.label-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: none;
+  height: 30px;
+  padding: 0 10px;
+  border-radius: 6px;
+  color: var(--text);
+  font-size: 13px;
+  text-align: left;
+}
+.label-list > :first-child.label-row {
+  margin-top: 6px;
+}
+.label-row.is-active {
+  background: var(--hover);
+}
+.label-row:focus-visible {
+  outline: none;
+  background: var(--hover);
+}
+.label-row .label-dot {
+  flex: none;
+}
+.label-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.label-row.is-on .label-name {
+  font-weight: 500;
+}
+.label-path {
+  color: var(--text-3);
+}
+.label-match {
+  background: none;
+  color: inherit;
+  font-weight: 650;
+  text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, var(--accent) 60%, transparent);
+  text-decoration-thickness: 2px;
+  text-underline-offset: 3px;
+}
+.label-count {
+  flex: none;
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-3);
 }
 .label-check {
   display: grid;
   place-items: center;
   flex: none;
-  width: 14px;
-  height: 14px;
-  border-radius: 4px;
+  width: 16px;
+  height: 16px;
+  border-radius: 5px;
+  color: transparent;
   box-shadow: inset 0 0 0 1.5px var(--control-border);
+  transition: background-color var(--dur-1) ease, box-shadow var(--dur-1) ease;
+}
+.label-row.is-active .label-check:not(.is-on) {
+  box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--text) 35%, transparent);
 }
 .label-check.is-on {
   background: var(--accent);
   color: #fff;
   box-shadow: none;
 }
-.picker-item.is-active .label-check {
-  box-shadow: inset 0 0 0 1.5px rgba(255, 255, 255, 0.75);
+.label-create {
+  color: var(--text-2);
 }
-.picker-item.is-active .label-check.is-on {
-  background: #fff;
+.label-create strong {
+  color: var(--text);
+  font-weight: 600;
+}
+.label-create-icon {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 16px;
+  height: 16px;
+  border-radius: 5px;
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
   color: var(--accent);
 }
-.picker-item.is-active .label-dot {
-  box-shadow: 0 0 0 1.5px rgba(255, 255, 255, 0.9);
+.label-create.is-active {
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
 }
 .dialog-labels .dialog-footer {
-  justify-content: flex-start;
-  padding: 8px 10px 10px;
+  justify-content: space-between;
+  padding: 6px 8px 6px 6px;
+  background: var(--surface-alt);
+  border-radius: 0 0 12px 12px;
 }
 .label-manage {
   display: inline-flex;
   align-items: center;
   gap: 6px;
+  height: 26px;
+  padding: 0 8px;
   background: transparent;
   box-shadow: none;
   color: var(--text-2);
+  font-size: 12px;
   font-weight: 500;
 }
 .label-manage:hover {
   color: var(--text);
   background: var(--hover);
 }
+.label-keys {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 11px;
+  color: var(--text-3);
+  white-space: nowrap;
+}
+.label-keys kbd {
+  display: inline-grid;
+  place-items: center;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  border-radius: 4px;
+  background: var(--input-bg);
+  color: var(--text-2);
+  font: 600 10px/1 var(--font);
+}
 .label-unsupported {
-  padding: 12px 10px 16px;
+  padding: 12px 18px 16px;
   line-height: 1.45;
   text-align: left;
+}
+@media (prefers-reduced-motion: reduce) {
+  .label-search,
+  .label-check {
+    transition: none;
+  }
 }
 
 /* Sidebar: a tag-coloured dot for label folders, and the Labels list of keyword accounts. */
