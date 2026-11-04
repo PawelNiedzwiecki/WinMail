@@ -16,10 +16,15 @@ import { basename, join } from 'path'
 import type {
   Account,
   AccountInput,
+  AccountLabels,
   Address,
   AttachmentInfo,
   CalendarInvite,
   InviteAnswer,
+  LabelChange,
+  LabelColour,
+  LabelInfo,
+  LabelSupport,
   MailChangedEvent,
   MailQuery,
   MailProgressEvent,
@@ -36,8 +41,18 @@ import type {
 } from '../shared/types'
 import { getProvider } from '../shared/providers'
 import { categorize } from '../shared/categorize'
-import type { FolderState, FolderStatus, MailCache, SnapState } from './cache'
-import type { Snoozed, Store } from './store'
+import type { FlagRow, FolderState, FolderStatus, MailCache, SnapState } from './cache'
+import type { AccountLabelStore, Snoozed, Store } from './store'
+import {
+  GMAIL_SYSTEM_FOLDER,
+  KEYWORD_DEFAULTS,
+  defaultColour,
+  gmailLabels,
+  isLabelKeyword,
+  keywordFor,
+  keywordLabels,
+  keywordName
+} from './labels'
 import { decodeCharset, decodeTransfer, htmlToText, makePreview } from './text'
 import { imapNeedsCheck, keepImap, toGmailQuery, toImapSearch } from './query'
 import { GoogleTokens, REAUTH_MESSAGE, signIn as googleSignIn } from './google'
@@ -142,6 +157,16 @@ const MAX_NEW_MESSAGES = 200
 const CATEGORY_QUERY = /^category:\w+$/
 
 const REFUSED_FLAGS = 'The server refused to change the flags.'
+
+const REFUSED_LABELS = 'The server refused to change the labels.'
+
+const NO_KEYWORDS = "This account's server can't store labels on messages."
+
+/** Whether the selected folder takes new keywords: PERMANENTFLAGS has `\*`, or the server did not say. */
+function keywordsAllowed(mb: ImapFlow['mailbox']): boolean {
+  if (!mb) return false
+  return !mb.permanentFlags || mb.permanentFlags.has('\\*')
+}
 
 /** Folder WinMail creates for snoozed mail. */
 export const SNOOZE_FOLDER = 'WinMail Snoozed'
@@ -332,6 +357,8 @@ export class MailService {
   private pending = new Map<string, Promise<ImapFlow>>()
   private previews = new Map<string, string>()
   private specialPaths = new Map<string, Partial<Record<SpecialUse, string>>>()
+  /** The last folder list of each account, for Gmail labels and for searching every folder. */
+  private mailboxLists = new Map<string, MailboxInfo[]>()
   private inboxTimers = new Map<string, NodeJS.Timeout>()
   /** Folders (account|path|uidValidity) synced since the app started; only those report "Downloading N new messages". */
   private syncedThisSession = new Set<string>()
@@ -407,6 +434,7 @@ export class MailService {
     const c = this.clients.get(accountId)
     this.clients.delete(accountId)
     this.specialPaths.delete(accountId)
+    this.mailboxLists.delete(accountId)
     clearTimeout(this.inboxTimers.get(accountId))
     this.inboxTimers.delete(accountId)
     if (this.lastSource?.key.startsWith(`${accountId}|`)) this.lastSource = null
@@ -635,6 +663,7 @@ export class MailService {
     const rank = (m: MailboxInfo) => (m.specialUse ? SPECIAL_ORDER.indexOf(m.specialUse) : 99)
     const sorted = out.sort((a, b) => rank(a) - rank(b) || a.path.localeCompare(b.path))
     this.cache.saveMailboxes(accountId, sorted, states)
+    this.mailboxLists.set(accountId, sorted)
     return sorted
   }
 
@@ -769,7 +798,7 @@ export class MailService {
         }
       }
 
-      const { flags, modseq } = await this.readFlags(c, newFloor, st, snap)
+      const { flags, modseq } = await this.readFlags(c, accountId, path, newFloor, st, snap)
       const ok = this.cache.applySync(accountId, path, gen, {
         upsert,
         remove,
@@ -791,24 +820,36 @@ export class MailService {
    */
   private async readFlags(
     c: ImapFlow,
+    accountId: string,
+    path: string,
     floor: number,
     st: FolderState,
     snap: SnapState
-  ): Promise<{ flags: { uid: number; seen: boolean; flagged: boolean }[]; modseq: string | null }> {
+  ): Promise<{ flags: FlagRow[]; modseq: string | null }> {
     const range = `${floor}:*`
-    const usable = (rows: { uid?: number; flags?: Set<string> }[]) =>
-      rows.filter((r): r is { uid: number; flags: Set<string> } => r.uid !== undefined && r.uid >= floor && !!r.flags)
-    const toFlags = (rows: { uid: number; flags: Set<string> }[]) =>
-      rows.map((r) => ({ uid: r.uid, seen: r.flags.has('\\Seen'), flagged: r.flags.has('\\Flagged') }))
+    const gmail = this.isGmail(accountId)
+    const folderLabel = this.labelFolder(accountId, path)
+    type Row = { uid: number; flags: Set<string>; labels?: Set<string> }
+    const usable = (rows: { uid?: number; flags?: Set<string>; labels?: Set<string> }[]) =>
+      rows.filter((r): r is Row => r.uid !== undefined && r.uid >= floor && !!r.flags)
+    const toFlags = (rows: Row[]) =>
+      rows.map((r) => ({
+        uid: r.uid,
+        seen: r.flags.has('\\Seen'),
+        flagged: r.flags.has('\\Flagged'),
+        // A Gmail row without X-GM-LABELS keeps the labels saved for it.
+        labels: gmail ? (r.labels ? gmailLabels(r.labels, folderLabel) : undefined) : keywordLabels(r.flags)
+      }))
+    const query = { uid: true, flags: true, labels: gmail }
     if (snap.modseq !== null && st.modseq !== null) {
-      const rows = await c.fetchAll(range, { uid: true, flags: true }, { uid: true, changedSince: BigInt(st.modseq) })
+      const rows = await c.fetchAll(range, query, { uid: true, changedSince: BigInt(st.modseq) })
       const good = usable(rows)
       let next = BigInt(st.modseq) > BigInt(snap.modseq) ? BigInt(st.modseq) : BigInt(snap.modseq)
       for (const r of rows) if (r.uid !== undefined && r.uid >= floor && r.modseq !== undefined && r.modseq > next) next = r.modseq
       // A row without a UID cannot be applied; keep the old checkpoint so that change comes again.
       return { flags: toFlags(good), modseq: rows.some((r) => r.uid === undefined) ? st.modseq : String(next) }
     }
-    const rows = await c.fetchAll(range, { uid: true, flags: true }, { uid: true })
+    const rows = await c.fetchAll(range, query, { uid: true })
     return { flags: toFlags(usable(rows)), modseq: snap.modseq }
   }
 
@@ -819,14 +860,14 @@ export class MailService {
     limit: number,
     upsert: MessageSummary[],
     remove: number[],
-    flags: { uid: number; seen: boolean; flagged: boolean }[]
+    flags: FlagRow[]
   ): MessageSummary[] {
     const rows = new Map((this.cache.window(accountId, path, 100_000)?.messages ?? []).map((m) => [m.uid, m]))
     for (const u of remove) rows.delete(u)
     for (const m of upsert) rows.set(m.uid, m)
     for (const f of flags) {
       const m = rows.get(f.uid)
-      if (m) rows.set(f.uid, { ...m, seen: f.seen, flagged: f.flagged })
+      if (m) rows.set(f.uid, { ...m, seen: f.seen, flagged: f.flagged, labels: f.labels ?? m.labels })
     }
     return [...rows.values()].sort((a, b) => b.date.localeCompare(a.date)).slice(0, limit)
   }
@@ -940,6 +981,8 @@ export class MailService {
   ): Promise<MessageSummary[]> {
     const mb = c.mailbox
     if (!mb) return []
+    const gmail = this.isGmail(accountId)
+    const folderLabel = this.labelFolder(accountId, path)
     const rows = onlyAsked(
       await c.fetchAll(
         range,
@@ -947,6 +990,7 @@ export class MailService {
           uid: true,
           envelope: true,
           flags: true,
+          labels: gmail,
           internalDate: true,
           bodyStructure: true,
           threadId: true,
@@ -1019,6 +1063,7 @@ export class MailService {
           parents: [...new Set([...refs, ...messageIds(env?.inReplyTo)])],
           threadId: r.threadId,
           uidValidity: String(mb.uidValidity),
+          labels: gmail ? gmailLabels(r.labels, folderLabel) : keywordLabels(r.flags),
           category: categorize({
             email: from.email,
             subject,
@@ -1053,9 +1098,10 @@ export class MailService {
 
   private fetchMessage(accountId: string, path: string, uid: number): Promise<MessageDetail> {
     return this.withMailbox(accountId, path, async (c) => {
+      const gmail = this.isGmail(accountId)
       const m = await c.fetchOne(
         String(uid),
-        { uid: true, source: true, flags: true, bodyStructure: true, internalDate: true, threadId: true },
+        { uid: true, source: true, flags: true, labels: gmail, bodyStructure: true, internalDate: true, threadId: true },
         { uid: true }
       )
       if (!m || !m.source) throw new Error('Message not found. It may have been moved.')
@@ -1087,6 +1133,7 @@ export class MailService {
         references: refs,
         parents: [...new Set([...refs, ...messageIds(p.inReplyTo)])],
         threadId: m.threadId,
+        labels: gmail ? gmailLabels(m.labels, this.labelFolder(accountId, path)) : keywordLabels(m.flags),
         unsubscribe: parseUnsubscribe(p.headerLines),
         uidValidity: String(c.mailbox && c.mailbox.uidValidity),
         invite: this.inviteIn(accountId, p.attachments),
@@ -1259,6 +1306,223 @@ export class MailService {
       this.statuses.delete(`${accountId}|${path}`)
       if (await c.messageFlagsAdd({ seen: false }, ['\\Seen'])) this.cache.markAllRead(accountId, path)
       else this.cache.clearCheckpoint(accountId, path)
+    })
+  }
+
+  // ---------- Labels ----------
+
+  private isGmail(accountId: string): boolean {
+    return this.store.getAccount(accountId).provider === 'gmail'
+  }
+
+  /** On Gmail, the label a folder stands for (a folder that is no system folder); undefined elsewhere. */
+  private labelFolder(accountId: string, path: string): string | undefined {
+    if (!this.isGmail(accountId) || path.toUpperCase() === 'INBOX' || GMAIL_SYSTEM_FOLDER.test(path)) return undefined
+    const special = this.specialPaths.get(accountId)
+    if (special && Object.values(special).includes(path)) return undefined
+    return path
+  }
+
+  /** The account's folders, from the server or, offline, as saved on this PC. */
+  private async folders(accountId: string): Promise<MailboxInfo[]> {
+    const known = this.mailboxLists.get(accountId)
+    if (known) return known
+    try {
+      return await this.listMailboxes(accountId)
+    } catch (err) {
+      const saved = this.cache.mailboxes(accountId)
+      if (saved) return saved
+      throw err
+    }
+  }
+
+  private info(id: string, saved: AccountLabelStore, name?: string): LabelInfo {
+    const style = saved.styles[id] ?? {}
+    return { id, name: style.name || name || keywordName(id), colour: style.colour ?? defaultColour(id) }
+  }
+
+  async listLabels(accountId: string): Promise<AccountLabels> {
+    const saved = this.store.accountLabels(accountId)
+    const byName = (a: LabelInfo, b: LabelInfo) => a.name.localeCompare(b.name, 'en-GB', { sensitivity: 'base' })
+    if (this.isGmail(accountId)) {
+      const boxes = await this.folders(accountId)
+      const labels = boxes
+        .filter((b) => !b.specialUse && !GMAIL_SYSTEM_FOLDER.test(b.path) && b.path.toUpperCase() !== 'INBOX')
+        .map((b) => this.info(b.path, saved, b.path))
+      return { support: 'gmail', labels: labels.sort(byName) }
+    }
+    let support: LabelSupport | undefined = saved.support
+    let seen = saved.seen ?? []
+    try {
+      await this.specialPath(accountId, 'inbox')
+      const live = await this.withMailbox(accountId, this.inboxOf(accountId), async (c) => ({
+        allowed: keywordsAllowed(c.mailbox),
+        // FLAGS lists every keyword in use in the folder (and, on most servers, every one ever defined).
+        flags: keywordLabels(c.mailbox ? c.mailbox.flags : undefined)
+      }))
+      support = live.allowed ? 'keywords' : 'none'
+      seen = live.flags
+      if (saved.support !== support || JSON.stringify(saved.seen ?? []) !== JSON.stringify(seen)) {
+        this.store.setAccountLabels(accountId, { ...saved, support, seen })
+      }
+    } catch (err) {
+      // Offline: what the server said last time.
+      if (!support) throw err
+    }
+    if (support === 'none') return { support, labels: [] }
+    const ids = new Set([...KEYWORD_DEFAULTS.map((d) => d.id), ...seen, ...Object.keys(saved.styles)])
+    const labels = [...ids].filter((id) => !saved.styles[id]?.deleted && isLabelKeyword(id)).map((id) => this.info(id, saved))
+    const order = (l: LabelInfo) => KEYWORD_DEFAULTS.findIndex((d) => d.id === l.id)
+    // Thunderbird's five first, in its order; then the rest by name.
+    return {
+      support: 'keywords',
+      labels: labels.sort((a, b) => {
+        const x = order(a)
+        const y = order(b)
+        if (x >= 0 || y >= 0) return (x < 0 ? 99 : x) - (y < 0 ? 99 : y)
+        return byName(a, b)
+      })
+    }
+  }
+
+  async setLabels(
+    accountId: string,
+    path: string,
+    uids: number[],
+    change: LabelChange,
+    uidValidity?: string
+  ): Promise<MoveResult | null> {
+    const add = [...new Set(change.add ?? [])].filter(Boolean)
+    const remove = [...new Set(change.remove ?? [])].filter((l) => l && !add.includes(l))
+    if (!uids.length || (!add.length && !remove.length)) return null
+    const gmail = this.isGmail(accountId)
+    // Taking a Gmail label off in that label's own folder takes the messages out of it: note where they stay.
+    const leaving = gmail && remove.includes(path) ? await this.specialPath(accountId, 'all') : undefined
+    const ids = await this.withMailbox(
+      accountId,
+      path,
+      async (c) => {
+        const range = uids.join(',')
+        if (gmail && !c.capabilities.has('X-GM-EXT-1')) throw new Error("This Gmail server didn't offer labels over IMAP.")
+        if (!gmail && add.length && !keywordsAllowed(c.mailbox)) throw new Error(NO_KEYWORDS)
+        let emailIds: string[] = []
+        if (leaving) {
+          const rows = await c.fetchAll(range, { uid: true, emailId: true }, { uid: true })
+          emailIds = rows.map((r) => r.emailId).filter((id): id is string => !!id)
+        }
+        const opts = { uid: true, useLabels: gmail }
+        // imapflow answers false, rather than throwing, when the server says no or drops a keyword it won't take.
+        if (add.length && !(await c.messageFlagsAdd(range, add, opts))) throw new Error(gmail ? REFUSED_LABELS : NO_KEYWORDS)
+        if (remove.length && !(await c.messageFlagsRemove(range, remove, opts))) throw new Error(REFUSED_LABELS)
+        this.statuses.delete(`${accountId}|${path}`)
+        if (leaving) this.cache.remove(accountId, path, uids, true)
+        else this.cache.setLabels(accountId, path, uids, { add, remove })
+        return emailIds
+      },
+      uidValidity
+    )
+    // The label folders gained or lost messages; their next visit must not be skipped as unchanged.
+    if (gmail) for (const l of [...add, ...remove]) this.statuses.delete(`${accountId}|${l}`)
+    if (!gmail) this.rememberKeywords(accountId, add)
+    if (!leaving || !ids.length) return null
+    return this.withMailbox(accountId, leaving, async (c) => {
+      const found: number[] = []
+      for (const emailId of ids) found.push(...((await c.search({ emailId }, { uid: true })) || []))
+      this.statuses.delete(`${accountId}|${leaving}`)
+      return found.length ? { path: leaving, uids: found, uidValidity: String(c.mailbox && c.mailbox.uidValidity) } : null
+    })
+  }
+
+  /** Keywords used from WinMail stay offered even if the server's FLAGS list doesn't name them. */
+  private rememberKeywords(accountId: string, ids: string[]): void {
+    const saved = this.store.accountLabels(accountId)
+    const fresh = ids.filter((id) => !saved.styles[id] || saved.styles[id]!.deleted)
+    if (!fresh.length) return
+    const styles = { ...saved.styles }
+    for (const id of fresh) styles[id] = { ...styles[id], deleted: undefined }
+    this.store.setAccountLabels(accountId, { ...saved, styles })
+  }
+
+  async createLabel(accountId: string, rawName: string, colour?: LabelColour): Promise<LabelInfo> {
+    const name = rawName.trim().replace(/\s+/g, ' ')
+    if (!name) throw new Error('Give the label a name.')
+    const current = await this.listLabels(accountId)
+    const same = current.labels.find((l) => l.name.localeCompare(name, 'en-GB', { sensitivity: 'base' }) === 0)
+    if (same) return same
+    const saved = this.store.accountLabels(accountId)
+    if (current.support === 'gmail') {
+      if (name.startsWith('\\') || GMAIL_SYSTEM_FOLDER.test(name)) throw new Error('Gmail keeps that name for itself.')
+      const c = await this.client(accountId)
+      const made = await c.mailboxCreate(name)
+      await this.listMailboxes(accountId)
+      const id = made.path
+      this.store.setAccountLabels(accountId, { ...saved, styles: { ...saved.styles, [id]: { colour: colour ?? defaultColour(id) } } })
+      return this.info(id, this.store.accountLabels(accountId), id)
+    }
+    if (current.support === 'none') throw new Error(NO_KEYWORDS)
+    const id = keywordFor(name)
+    if (!id) throw new Error('Use some letters or numbers in the name.')
+    const taken = current.labels.find((l) => l.id === id)
+    if (taken) return taken
+    this.store.setAccountLabels(accountId, {
+      ...saved,
+      styles: { ...saved.styles, [id]: { name, colour: colour ?? defaultColour(id) } }
+    })
+    return this.info(id, this.store.accountLabels(accountId))
+  }
+
+  async updateLabel(accountId: string, id: string, patch: { name?: string; colour?: LabelColour }): Promise<LabelInfo> {
+    let saved = this.store.accountLabels(accountId)
+    const name = patch.name?.trim().replace(/\s+/g, ' ')
+    let target = id
+    if (name !== undefined && !name) throw new Error('Give the label a name.')
+    if (name && this.isGmail(accountId) && name !== id) {
+      if (name.startsWith('\\') || GMAIL_SYSTEM_FOLDER.test(name)) throw new Error('Gmail keeps that name for itself.')
+      const c = await this.client(accountId)
+      const res = await c.mailboxRename(id, name)
+      target = res.newPath
+      this.cache.relabelAll(accountId, id, target)
+      this.cache.wipeFolder(accountId, id)
+      await this.listMailboxes(accountId)
+      const { [id]: style, ...rest } = saved.styles
+      saved = { ...saved, styles: { ...rest, [target]: { ...style } } }
+    }
+    const style = { ...saved.styles[target] }
+    if (name && !this.isGmail(accountId)) style.name = name
+    if (patch.colour) style.colour = patch.colour
+    delete style.deleted
+    this.store.setAccountLabels(accountId, { ...saved, styles: { ...saved.styles, [target]: style } })
+    return this.info(target, this.store.accountLabels(accountId), this.isGmail(accountId) ? target : undefined)
+  }
+
+  async deleteLabel(accountId: string, id: string): Promise<void> {
+    const saved = this.store.accountLabels(accountId)
+    if (this.isGmail(accountId)) {
+      // Deleting a Gmail label takes it off every message; the messages stay in All Mail.
+      const c = await this.client(accountId)
+      await c.mailboxDelete(id)
+      this.cache.relabelAll(accountId, id, null)
+      this.cache.wipeFolder(accountId, id)
+      const { [id]: _gone, ...styles } = saved.styles
+      this.store.setAccountLabels(accountId, { ...saved, styles })
+      await this.listMailboxes(accountId)
+      return
+    }
+    // Keywords live on each message: take this one off everywhere it is.
+    for (const b of await this.folders(accountId)) {
+      await this.withMailbox(accountId, b.path, async (c) => {
+        if (!c.mailbox || !c.mailbox.exists) return
+        const uids = (await c.search({ keyword: id }, { uid: true })) || []
+        if (!uids.length) return
+        if (!(await c.messageFlagsRemove(packUids(uids), [id], { uid: true }))) throw new Error(REFUSED_LABELS)
+        this.statuses.delete(`${accountId}|${b.path}`)
+      })
+    }
+    this.cache.relabelAll(accountId, id, null)
+    this.store.setAccountLabels(accountId, {
+      ...saved,
+      seen: (saved.seen ?? []).filter((k) => k !== id),
+      styles: { ...saved.styles, [id]: { deleted: true } }
     })
   }
 

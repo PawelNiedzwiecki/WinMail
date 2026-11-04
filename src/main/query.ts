@@ -1,5 +1,6 @@
 import type { SearchObject } from 'imapflow'
 import type { MailQuery, MessageSummary } from '../shared/types'
+import { gmailLabelTerm } from './labels'
 
 /** Turns a structured `MailQuery` into what the server understands: Gmail operators, or IMAP SEARCH criteria. */
 
@@ -40,6 +41,7 @@ export function toGmailQuery(q: MailQuery): string {
   if (q.flagged) out.push('is:starred')
   if (q.hasAttachment) out.push('has:attachment')
   if (q.category) out.push(`category:${q.category}`)
+  for (const l of clean(q.labels ?? [])) out.push(gmailLabelTerm(l))
   return out.join(' ')
 }
 
@@ -73,6 +75,7 @@ export function toImapSearch(q: MailQuery): SearchObject {
   if (q.read) parts.push({ seen: q.read === 'read' })
   if (q.flagged) parts.push({ flagged: true })
   if (q.hasAttachment) parts.push({ header: { 'content-type': 'multipart/mixed' } })
+  for (const keyword of clean(q.labels ?? [])) parts.push({ keyword })
   return allOf(parts)
 }
 

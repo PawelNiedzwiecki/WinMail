@@ -1,7 +1,8 @@
 import { Flag, Paperclip } from 'lucide-react'
 import { AnimatePresence, motion, type Variants } from 'motion/react'
 import { useEffect, useRef, type CSSProperties, type ReactNode, type UIEvent } from 'react'
-import type { ListDensity, MessageSummary } from '@shared/types'
+import type { AccountLabels, LabelInfo, ListDensity, MessageSummary } from '@shared/types'
+import { LabelChips, labelsFor } from './LabelChips'
 import { formatListDate } from '../format'
 import { useReduceMotion } from '../motion'
 
@@ -58,6 +59,12 @@ interface Props {
   /** Right-click on a row; the row is selected first. */
   onContextMenu?: (key: string, x: number, y: number) => void
   onLoadMore?: () => void
+  /** accountId -> labels, for the chips on each row. */
+  labelSets?: Record<string, AccountLabels>
+  /** A label not drawn on rows: the one the list is showing (a Gmail label folder or a label view). */
+  hideLabel?: string
+  /** A chip was clicked: show the messages with that label. */
+  onOpenLabel?: (accountId: string, label: LabelInfo) => void
 }
 
 export function MessageList(p: Props) {
@@ -160,6 +167,14 @@ export function MessageList(p: Props) {
                     </div>
                     <div className="row-subject">
                       <span className="row-subject-text">{m.subject}</span>
+                      {p.labelSets && (
+                        <LabelChips
+                          labels={labelsFor(m, p.labelSets, p.hideLabel)}
+                          compact={p.density === 'compact'}
+                          max={p.density === 'compact' ? 4 : 2}
+                          onOpen={p.onOpenLabel && ((l) => p.onOpenLabel!(m.accountId, l))}
+                        />
+                      )}
                       {m.hasAttachments ? <Paperclip size={11} className="row-clip" /> : null}
                       {p.accountLabels && <span className="row-account">{p.accountLabels[m.accountId]}</span>}
                     </div>

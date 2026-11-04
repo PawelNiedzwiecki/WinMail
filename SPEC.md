@@ -25,6 +25,7 @@ src/
     addressbook.ts Google People API and CardDAV address books
     text.ts        Charset/transfer decoding, HTML-to-text, previews
     ai.ts          Claude calls with the user's key: summarise, suggest a reply, AI search questions
+    labels.ts      Which flags are labels, keyword names (Thunderbird-style, modified UTF-7), default colours, Gmail `label:` terms
     query.ts       Structured search (`MailQuery`) to Gmail operators or IMAP SEARCH criteria
     ipc.ts         IPC handlers (errors returned as data)
   preload/     index.ts: typed `window.winmail` bridge
@@ -44,9 +45,9 @@ All under `%APPDATA%\winmail\`:
 
 | File | Contents |
 | --- | --- |
-| `winmail.json` | `accounts`, `settings`, `secrets` (passwords / Google refresh tokens, encrypted with `safeStorage` = DPAPI), plus queues for snoozed and scheduled mail. Written atomically (tmp + rename); unreadable file is moved aside and the user warned. |
+| `winmail.json` | `accounts`, `settings`, `secrets` (passwords / Google refresh tokens, encrypted with `safeStorage` = DPAPI), plus queues for snoozed and scheduled mail, and `labels` (per account: label colours, keyword display names, deleted keywords, whether the server takes keywords; kept apart from `settings` so a settings save never overwrites them). Written atomically (tmp + rename); unreadable file is moved aside and the user warned. |
 | `contacts.json` | Per-account contacts from address book and mail history. |
-| `mail-cache.db` (+ `-wal`, `-shm`) | SQLite (`node:sqlite`): folder list and unread counts per account, the newest ≤ 500 messages of each folder visited (summaries and previews), bodies of messages opened (≤ 5 MB each, ≤ 250 MB in all), Gmail category tabs. Plain, unencrypted. Only a cache: a damaged or newer file is deleted and rebuilt, and it works from memory if the disk fails. Folders unopened for 60 days drop their messages. Cleared in Settings > General > Storage. See CACHE.md. |
+| `mail-cache.db` (+ `-wal`, `-shm`) | SQLite (`node:sqlite`): folder list and unread counts per account, the newest ≤ 500 messages of each folder visited (summaries and previews), bodies of messages opened (≤ 5 MB each, ≤ 250 MB in all), Gmail category tabs. Each saved message keeps its labels (`messages.labels`, schema 3). Plain, unencrypted. Only a cache: a damaged or newer file is deleted and rebuilt, and it works from memory if the disk fails. Folders unopened for 60 days drop their messages. Cleared in Settings > General > Storage. See CACHE.md. |
 
 ## 4. IPC API
 
@@ -65,6 +66,7 @@ Defined in `src/shared/types.ts` (`WinMailApi`), bridged in `src/preload/index.t
 | searchQuery | `mail:searchQuery` | Structured search (`MailQuery`): Gmail operators on Google, IMAP SEARCH elsewhere, in the folder or the one `query.folder` names |
 | aiAvailable / setAiKey / ai | `ai:available`, `ai:setKey`, `ai:run` | Claude key; summarise and suggested reply |
 | aiSearch | `ai:search` | Claude turns a question into a `MailQuery` (only the question is sent) |
+| listLabels / setLabels / createLabel / updateLabel / deleteLabel | `labels:list`, `labels:set`, `labels:create`, `labels:update`, `labels:delete` | Labels: Gmail labels (X-GM-LABELS) on Google, IMAP keywords elsewhere; names and colours kept on this PC |
 | getMessage | `mail:message` | Full message (marks read) |
 | setFlags | `mail:flags` | Seen / flagged |
 | move | `mail:move` | Move to inbox / archive / junk / trash |
@@ -85,7 +87,9 @@ New methods added by roadmap items are listed in the changelog entry that introd
 
 **Mailboxes.** Sidebar shows Favourites (unified Inbox + per-account inboxes) and each account's folder tree. Special folders detected via SPECIAL-USE and sorted: Inbox, Drafts, Sent, Junk, Bin, Archive, All Mail, Flagged. Unread counts for Inbox, Junk and custom folders.
 
-**Message list.** Newest 60 per folder (unified inbox merges accounts by date); "Load Older Messages" raises the limit by 60. Rows show sender, date, subject, preview, unread dot, flag, attachment clip, account label in unified view. Right-click menu: reply, reply all, forward, read/unread, flag, move to inbox, archive, Move to…, Snooze…, junk, delete. Older messages load on scroll. Optional conversation grouping with a count badge. Multi-select with Ctrl/Shift-click. Search filters loaded messages at once, then searches the server (Gmail operators on Google). With a Claude key, the sparkle in the search box (or starting with `?`) asks for mail in plain language instead; see **AI search**. Gmail inboxes have category tabs.
+**Message list.** Newest 60 per folder (unified inbox merges accounts by date); "Load Older Messages" raises the limit by 60. Rows show sender, date, subject, preview, unread dot, flag, attachment clip, account label in unified view, label chips (dots in compact density). Right-click menu: reply, reply all, forward, read/unread, flag, move to inbox, archive, Move to…, Labels…, Snooze…, junk, delete. Older messages load on scroll. Optional conversation grouping with a count badge. Multi-select with Ctrl/Shift-click. Search filters loaded messages at once, then searches the server (Gmail operators on Google). With a Claude key, the sparkle in the search box (or starting with `?`) asks for mail in plain language instead; see **AI search**. Gmail inboxes have category tabs.
+
+**Labels.** Messages carry coloured labels. Google accounts use real Gmail labels (X-GM-LABELS, fetched with the list; system labels such as Inbox, Important and Starred are not shown); a Gmail label is also its folder in the sidebar, which shows the label's colour, so labelling a message puts it in that folder and taking the label off in that folder takes it out (with Undo, found again in All Mail by X-GM-MSGID). Other accounts store labels as IMAP keywords when the server allows new ones (PERMANENTFLAGS has `\*`): Thunderbird's `$label1`…`$label5` (Important, Work, Personal, To Do, Later) are offered by default, and new labels get Thunderbird-style keywords (lower case, specials as `_`, non-ASCII in modified UTF-7), so tags match Thunderbird; `$` keywords used by apps for bookkeeping ($Forwarded, $Junk, $MailFlagBit…) and Junk/NonJunk are never shown. A server that refuses keywords says so in the picker and in Settings; nothing is faked locally. Chips sit on message rows (two, then "+N"; dots in compact density), under the subject in the reading pane (× takes one off, the tag button opens the picker) and on conversation rows (every label in the conversation). **Labels…** in the context menu, the action bar (it folds into its "…" menu when the pane is narrow), the reading pane's More menu and the `l` key (Gmail shortcuts) opens a picker with type-to-filter, ticks (a dash when only some selected messages have it) and "Create label “…”"; it works on a multi-selection in one account and stays open for more changes. Changes show at once, roll back with an error toast if the server refuses, and toast with Undo (also Ctrl+Z / `z`). Clicking a chip shows that label's messages: the label folder on Gmail; elsewhere a label view (also under **Labels** in the account's sidebar section) that searches for the keyword in All Mail, or Inbox, Archive, Sent and every user folder. Settings > Labels renames (on Gmail, on the server; for keywords, only WinMail's name), recolours (nine colours, kept on this PC: Gmail does not share colours over IMAP) and deletes (taken off every message: Gmail deletes the label, keywords are removed folder by folder) each account's labels, and creates new ones.
 
 **Reading.** HTML sanitised with DOMPurify in a sandboxed iframe; remote content blocked until allowed (or setting on). Message appearance light/dark/same as app. Plain text linkified. Attachments listed above the body, click to save. Double-click a message in the list to open it in its own window. Opening marks read (the whole conversation when grouped). More menu: Print, Show Original, Summarise (Claude key), Move to, Snooze. Mailing lists get an Unsubscribe banner. Calendar invitations show an event card: date, time in your time zone, place, organiser and guests, Yes / Maybe / No, Add to Calendar.
 
@@ -99,9 +103,18 @@ New methods added by roadmap items are listed in the changelog entry that introd
 
 **Notifications.** Windows toasts for new inbox mail while no WinMail window is focused: sender avatar, subject and preview, inline reply (sent through the undo-send outbox), Archive and Mark as read; more than 3 at once become one summary with Mark all as read. Settings > Notifications: on/off, all mail / Primary only / people I know, per-account switches, preview (full / sender / hidden), sound, quiet hours, test button, unread count on the taskbar button. See NOTIFICATIONS.md.
 
-**Shortcuts.** Ctrl+N new, Ctrl+R reply, Ctrl+Shift+R reply all, Ctrl+Shift+F forward, Ctrl+F search, Ctrl+, settings, Del delete, Up/Down move selection (Shift extends), Ctrl+A select all, Ctrl+Enter send, Esc close. Optional Gmail keys: j/k, e, #, !, r, a, f, s, Shift+I/U, x, b, v, z, c, /.
+**Shortcuts.** Ctrl+N new, Ctrl+R reply, Ctrl+Shift+R reply all, Ctrl+Shift+F forward, Ctrl+F search, Ctrl+, settings, Del delete, Up/Down move selection (Shift extends), Ctrl+A select all, Ctrl+Enter send, Esc close. Optional Gmail keys: j/k, e, #, !, r, a, f, s, Shift+I/U, x, b, v, l (labels), z, c, /.
 
 ## 6. Changelog
+
+### 2026-11-04 — Labels on messages
+- **Labels** you can see, add, remove and filter by; see **Labels** in the feature spec. Gmail labels on Google accounts, IMAP keywords (Thunderbird's `$label1`…`$label5` plus your own) elsewhere; servers that refuse keywords are told apart and say so.
+- Main: new `main/labels.ts` (what counts as a label, keyword names, default colours, Gmail `label:` terms). `MailService` fetches X-GM-LABELS (Gmail) or reads keywords from FLAGS with every list, sync and opened message; `listLabels`, `setLabels` (`messageFlagsAdd`/`Remove`, with `useLabels` on Gmail; a refused or dropped keyword is an error, never a silent no-op), `createLabel` (Gmail `mailboxCreate`), `updateLabel` (Gmail `mailboxRename`), `deleteLabel` (Gmail `mailboxDelete`; keywords searched and removed in every folder). `MailQuery.labels` becomes `label:` on Gmail and `KEYWORD` elsewhere; a label search in "all" also covers user folders when there is no All Mail.
+- Store: `labels` per account in `winmail.json` (colours, keyword names, deleted keywords, keyword support and keywords seen, for offline).
+- Cache: schema 3 adds `messages.labels`; flag syncs carry labels; `setLabels` and `relabelAll` (rename/delete) write through. Upgrading clears every folder's CHANGEDSINCE checkpoint once, so the next sync reads all flags and labels.
+- Renderer: `components/LabelChips.tsx` (chips, dots, `labelsFor`), `components/LabelPicker.tsx`, `components/settings/LabelsPage.tsx` (Settings > Labels), `labels.css` (nine colours with light and dark tokens); label view as a new `Selection` kind (`label`); Labels… in the context menu, action bar, More menu and `l`; optimistic changes with rollback and Undo in `App.tsx`.
+- New API (with mocks; `?nolabels` in mock mode makes iCloud refuse keywords): `listLabels`, `setLabels`, `createLabel`, `updateLabel`, `deleteLabel`; types `AccountLabels`, `LabelInfo`, `LabelChange`, `LabelColour`, `LabelSupport`; `MessageSummary.labels`, `MailQuery.labels`.
+- Checked: script tests of the label helpers (keyword filtering, Thunderbird-style names incl. modified UTF-7), query translation (Gmail `label:`, IMAP `KEYWORD` alone and with other terms), the cache upgrade from schema 2 and label write-through, and `MailService` against a stubbed imapflow connection (Gmail add/remove with `useLabels`, undo target in All Mail, refused on a renumbered folder, create/rename/delete; keywords add, create, rename, delete across folders; a server without `\*` refused). Mock-mode UI with Playwright in light and dark, comfortable and compact: chips, reading-pane chips and ×, Undo, picker on one and several messages (mixed state), creating from the picker, label view, Gmail chip opening its folder, Settings > Labels colour, rename and delete, a server without keywords. Not checked: a real Gmail or IMAP account (none in the build container), so whether Gmail bumps MODSEQ for label changes (if not, a label changed elsewhere shows after the next full flag read), how Gmail matches `label:` for names with unusual characters, and real servers' PERMANENTFLAGS are untested.
 
 ### 2026-10-26 — AI search
 - **Ask for mail in plain language** with your Claude key: "invoices from Northwind last month", "emails from Jamie about the hike with attachments", "unread newsletters this week". Sparkle button in the search box (only when a key is saved) or a leading `?`; Enter asks. See **AI search** in the feature spec.
@@ -226,7 +239,7 @@ Status: `[x]` done, `[ ]` planned. *Gmail-only* items only apply to Google accou
 - Outlook: needs Microsoft OAuth (tracked separately).
 - ~~double click should open the mail in new window~~ done 2026-10-21
 - ~~mails are not scrollable~~ fixed 2026-10-21
-- labels in mails
+- ~~labels in mails~~ done 2026-11-04
 - ~~integrating AI to summarise mails or search specific criteria~~ summarise done 2026-10-20, AI search done 2026-10-26
 - ~~picking up attachments at the top of the mail~~ done 2026-10-21
 - ~~picking up any additional events etc.~~ calendar invitations done 2026-10-23

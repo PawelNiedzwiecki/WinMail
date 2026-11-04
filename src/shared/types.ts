@@ -106,6 +106,11 @@ export interface MessageSummary {
    * saved before the server renumbered the folder cannot act on a different message.
    */
   uidValidity?: string
+  /**
+   * Label ids on the message (see `LabelInfo`): Gmail user labels on Google accounts, IMAP keywords elsewhere.
+   * Missing on rows saved before WinMail read labels; they arrive with the folder's next full flag read.
+   */
+  labels?: string[]
 }
 
 /** Inbox category tabs: Gmail's own on Google accounts, worked out by WinMail elsewhere. */
@@ -168,6 +173,37 @@ export interface Unsubscribe {
   url?: string
   mailto?: string
   oneClick: boolean
+}
+
+/** Colours a label can have; drawn from a palette that works in light and dark. */
+export type LabelColour = 'red' | 'orange' | 'yellow' | 'green' | 'teal' | 'blue' | 'purple' | 'pink' | 'grey'
+
+export const LABEL_COLOURS: LabelColour[] = ['red', 'orange', 'yellow', 'green', 'teal', 'blue', 'purple', 'pink', 'grey']
+
+/**
+ * How an account keeps labels: Gmail labels (X-GM-LABELS), IMAP keywords (custom flags, `$label1`…`$label5` as
+ * Thunderbird uses them), or not at all when the server does not let mail apps store keywords.
+ */
+export type LabelSupport = 'gmail' | 'keywords' | 'none'
+
+export interface LabelInfo {
+  /** Gmail: the label's name as IMAP has it (also its folder path). Keywords: the keyword, e.g. `$label1`. */
+  id: string
+  /** What the user sees; for keywords this can be renamed in WinMail without touching the server. */
+  name: string
+  /** Kept on this PC: Gmail does not share label colours over IMAP. */
+  colour: LabelColour
+}
+
+export interface AccountLabels {
+  support: LabelSupport
+  labels: LabelInfo[]
+}
+
+/** Labels to add to and take off messages. */
+export interface LabelChange {
+  add?: string[]
+  remove?: string[]
 }
 
 export type MoveTarget = 'trash' | 'archive' | 'junk' | 'inbox'
@@ -287,6 +323,8 @@ export interface MailQuery {
   hasAttachment: boolean
   category: GmailCategory | null
   folder: MailQueryFolder | null
+  /** Label ids that must all be on the message (Gmail `label:`, IMAP KEYWORD). */
+  labels?: string[]
 }
 
 export type Appearance = 'system' | 'light' | 'dark'
@@ -415,6 +453,19 @@ export interface WinMailApi {
    * unless `query.folder` names another folder of the account. Newest first.
    */
   searchQuery(accountId: string, mailbox: string, query: MailQuery, limit?: number): Promise<MessageSummary[]>
+  /** The account's labels with their names and colours, and whether its server can store them at all. */
+  listLabels(accountId: string): Promise<AccountLabels>
+  /**
+   * Adds and removes labels. Null, unless the messages left `mailbox` because of it (a Gmail label taken off in
+   * that label's own folder): then where they are now, so the change can be undone.
+   */
+  setLabels(accountId: string, mailbox: string, uids: number[], change: LabelChange, uidValidity?: string): Promise<MoveResult | null>
+  /** A new label: a Gmail label on Google accounts, a keyword elsewhere. Returns the existing one if the name is taken. */
+  createLabel(accountId: string, name: string, colour?: LabelColour): Promise<LabelInfo>
+  /** Renames (on Gmail, on the server too) or recolours a label. */
+  updateLabel(accountId: string, id: string, patch: { name?: string; colour?: LabelColour }): Promise<LabelInfo>
+  /** Deletes a label and takes it off every message on the server. */
+  deleteLabel(accountId: string, id: string): Promise<void>
   /** Every message of a Gmail conversation, from All Mail. Empty on other providers. */
   listThread(accountId: string, threadId: string): Promise<MessageSummary[]>
   getMessage(accountId: string, mailbox: string, uid: number, uidValidity?: string): Promise<MessageDetail>

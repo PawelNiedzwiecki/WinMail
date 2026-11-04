@@ -11,11 +11,21 @@ import {
   MailMinus,
   Sparkles,
   X,
-  Layers
+  Layers,
+  Tag
 } from 'lucide-react'
 import { AnimatePresence } from 'motion/react'
 import { useEffect, useState, type ReactNode } from 'react'
-import type { Address, InviteAnswer, MessageAppearance, MessageDetail, MessageSummary, Unsubscribe } from '@shared/types'
+import type {
+  Address,
+  InviteAnswer,
+  LabelInfo,
+  MessageAppearance,
+  MessageDetail,
+  MessageSummary,
+  Unsubscribe
+} from '@shared/types'
+import { LabelChips } from './LabelChips'
 import { api } from '../api'
 import { Collapse } from './Collapse'
 import { ContextMenu, type MenuItem } from './ContextMenu'
@@ -56,6 +66,12 @@ interface Props {
   /** RSVP to the message's calendar invitation; rejects when it couldn't be sent. */
   onAnswerInvite?: (answer: InviteAnswer) => Promise<void>
   onOpenInvite?: () => void
+  /** The message's labels with names and colours; chips under the subject when there are any. */
+  labels?: LabelInfo[]
+  /** Opens the label picker; also shows the tag button in the header. */
+  onEditLabels?: () => void
+  onOpenLabel?: (label: LabelInfo) => void
+  onRemoveLabel?: (label: LabelInfo) => void
 }
 
 const fmtList = (list: Address[]) =>
@@ -80,7 +96,11 @@ export function MessageView({
   onCloseSummary,
   onUnsubscribe,
   onAnswerInvite,
-  onOpenInvite
+  onOpenInvite,
+  labels,
+  onEditLabels,
+  onOpenLabel,
+  onRemoveLabel
 }: Props) {
   const appDark = usePrefersDark()
   const dark = messageAppearance === 'app' ? appDark : messageAppearance === 'dark'
@@ -134,6 +154,22 @@ export function MessageView({
               {m.subject}
               {m.flagged && <Flag size={12} className="msg-flag" fill="currentColor" />}
             </div>
+            {(!!labels?.length || onEditLabels) && (
+              <div className="msg-labels">
+                <LabelChips labels={labels ?? []} max={12} onOpen={onOpenLabel} onRemove={onRemoveLabel} />
+                {onEditLabels && (
+                  <button
+                    className={`msg-label-add${labels?.length ? '' : ' is-empty'}`}
+                    title="Labels…"
+                    aria-label="Labels…"
+                    onClick={onEditLabels}
+                  >
+                    <Tag size={11} />
+                    {labels?.length ? null : <span>Add label</span>}
+                  </button>
+                )}
+              </div>
+            )}
             <div className="msg-to">
               To: <span>{fmtList(m.to) || '(undisclosed recipients)'}</span>
             </div>
