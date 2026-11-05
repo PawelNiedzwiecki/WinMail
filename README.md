@@ -10,6 +10,7 @@ Requires Node 18+ (Node 22 LTS recommended).
 yarn install
 yarn dev        # dev mode with hot reload
 yarn build      # production build into out/
+yarn test       # unit tests (Vitest) for the pure modules in src/shared
 yarn dist:win   # Windows installer into dist/ (run on Windows)
 ```
 
@@ -70,6 +71,7 @@ Existing app-password Google accounts can switch with **Sign in with Google…**
 - Scheduled list in the sidebar to edit or cancel scheduled mail
 - Optional Claude features with your own API key (Settings > General): Summarise a message, Suggest a reply, AI search (ask for mail in plain language with the sparkle in the search box, or start with `?`)
 - HTML mail sanitised with DOMPurify in a sandboxed iframe; remote images blocked until you allow them
+- Tracker shield: a banner such as "Tracked by Mailchimp · 3 tracked links" on mail that tracks you. Tracking pixels are removed even after you allow remote images; tracked links lose their tracking parameters, redirects that carry their destination are opened directly, and other click links are marked with the host they go through. All local: links are never fetched to see where they go
 - Attachments in received mail: click to save
 - Windows 11 Mica sidebar, native window buttons, light and dark mode
 
@@ -123,7 +125,7 @@ In a message card or inline reply:
 
 ```
 src/
-  shared/     Types and provider presets used by both processes
+  shared/     Types and provider presets used by both processes; trackers.ts is the Tracker shield's rules (with tests)
   main/       Electron main process
     store.ts  Accounts, settings, encrypted passwords
     mail.ts   IMAP (imapflow) and SMTP (nodemailer), drafts on a second IMAP connection, incremental folder sync
@@ -141,6 +143,7 @@ src/
                      WhenPicker (snooze), SourceDialog, ScheduledDialog
     src/threads.ts   Conversation grouping
     src/print.ts     Printable copy of a message
+    src/trackerShield.ts  Removes tracking pixels and cleans links in a message's HTML
     src/components/compose/  ComposeDock, ComposeWindow, ComposeForm, InlineReply,
                      RecipientField, RichEditor, FormatBar, ComposeFooter, ...
     src/compose/     Compose state and logic: sessions, actions, autosave, quote,
