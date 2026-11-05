@@ -107,6 +107,9 @@ New methods added by roadmap items are listed in the changelog entry that introd
 
 ## 6. Changelog
 
+### 2026-11-05 — Tier 4 planned (signature features)
+- Planning only, no code. WinMail's identity is **local-first + calm**. Seven signature features added to the Roadmap as **Tier 4**, built on a per-account **Vault**. The new terms are defined in [CONTEXT.md](CONTEXT.md). The rule that mail content goes to Claude only through a per-feature opt-in is recorded in [ADR 0001](docs/adr/0001-mail-content-leaves-the-pc-only-per-feature-opt-in.md).
+
 ### 2026-11-04 — Labels on messages
 - **Labels** you can see, add, remove and filter by; see **Labels** in the feature spec. Gmail labels on Google accounts, IMAP keywords (Thunderbird's `$label1`…`$label5` plus your own) elsewhere; servers that refuse keywords are told apart and say so.
 - Main: new `main/labels.ts` (what counts as a label, keyword names, default colours, Gmail `label:` terms). `MailService` fetches X-GM-LABELS (Gmail) or reads keywords from FLAGS with every list, sync and opened message; `listLabels`, `setLabels` (`messageFlagsAdd`/`Remove`, with `useLabels` on Gmail; a refused or dropped keyword is an error, never a silent no-op), `createLabel` (Gmail `mailboxCreate`), `updateLabel` (Gmail `mailboxRename`), `deleteLabel` (Gmail `mailboxDelete`; keywords searched and removed in every folder). `MailQuery.labels` becomes `label:` on Gmail and `KEYWORD` elsewhere; a label search in "all" also covers user folders when there is no All Mail.
@@ -232,6 +235,24 @@ Status: `[x]` done, `[ ]` planned. *Gmail-only* items only apply to Google accou
 - [x] Print and show original
 - [x] Inbox categories *(Gmail-only)*
 - [x] AI summarise and suggested reply (opt-in, Claude API key)
+
+### Tier 4 — signature features
+WinMail's identity: **your mail, on your PC** (local-first, private) and **calm** (mail doesn't run your day). Every feature works with any IMAP provider, and Gmail gets extras only where it has them. Terms (Vault, Delivery, Brief, VIP, Newsletter, Magazine, Waiting for, Tracker) are defined in [CONTEXT.md](CONTEXT.md). Any feature that sends mail content to Claude needs its own Content opt-in ([ADR 0001](docs/adr/0001-mail-content-leaves-the-pc-only-per-feature-opt-in.md)).
+
+Build order: Tracker shield first. The rest is not ordered yet, except that Ask your mailbox comes after the Vault.
+
+- [ ] **Tracker shield** *(first)*. Each message shows which Trackers it contains in a banner, for example "Tracked by Mailchimp · 3 tracked links". Tracking pixels are dropped even after remote images are allowed. Tracked links are cleaned where that is safe: tracking parameters (`utm_*` and similar) are stripped, and redirect links are unwrapped when the destination is inside the link itself. Any other tracked link gets a "tracked link" marker showing the real host. WinMail never fetches a link to find out where it goes. Local only.
+- [ ] **Batched delivery**. Inbox mail is held until the next Delivery at times the user sets (e.g. 9:00 / 13:00 / 17:00). Held mail is hidden in WinMail only and stays in the Inbox on the server, so nothing moves and nothing is lost if the PC is off. Held mail sends no notifications and doesn't count in the taskbar badge. VIPs (an explicit list, suggested from the people the user writes to most) come through at once. Each Delivery comes with a **Brief**.
+- [ ] **Morning brief**. The Brief of the day's first Delivery: who wrote, what needs the user, and what is still Waiting for a reply. Built locally by default; Claude-written summaries need a Content opt-in.
+- [ ] **Newsletter magazine**. Newsletters are moved out of the Inbox on the server (to a `Newsletters` folder; on Gmail, the label is added and Inbox removed), so every device gets a calmer Inbox. They are read as one Magazine issue per day or week. Detection: List-Unsubscribe / List-Id mail that WinMail's sorting does not call transactional (receipts, codes, security alerts). "Always / never a Newsletter" per sender is remembered. Claude summaries per article are optional (Content opt-in).
+- [ ] **Unsubscribe audit**. Lists ranked by how many of their messages the user has opened ("you've opened 0 of 48 from these 12 lists"). The user selects several and unsubscribes in one go through the existing List-Unsubscribe / RFC 8058 path. Read stats come from the Cache and the Vault. Local only.
+- [ ] **Waiting for**. Compose has a "Waiting for a reply" switch. It turns on by itself when the message asks a question and goes to people rather than lists. If no reply arrives in the conversation within 3 days (changeable per message), the message comes back as a nudge, and the Waiting for list in the sidebar shows them all. Local only.
+- [ ] **Vault**. A per-account switch, "Keep a full copy on this PC", downloads the account's whole history in the background and never trims it. Bodies are always kept. Attachments are kept up to a size the user sets (default 10 MB each), and bigger ones download when opened. The Vault is encrypted at rest with a key protected by Windows DPAPI (`safeStorage`). The Cache stays unencrypted and disposable as it is today. Settings shows its size, plus "Remove the copy on this PC".
+  - **Retire an account** (follows from the Vault): WinMail stops connecting to the account (job left, provider dropped, password gone) but keeps its Vault, so it stays readable and searchable offline.
+- [ ] **Ask your mailbox** *(after the Vault; needs its own design session)*. A question gets an answer with sources ("Door code 4417, from Anna's email on 3 Oct"). It answers fully from Vault accounts and from whatever is in the Cache elsewhere, and says when an account only has a partial copy. Sending excerpts to Claude needs a Content opt-in.
+- [ ] **Content opt-ins for existing features** (ADR 0001). Summarise and Suggest a reply each get their own switch and a visible "sent to Claude" marker.
+
+Parallel track: **Outlook** (Microsoft OAuth + XOAUTH2) is separate from Tier 4. It doesn't block Tier 4, but it ships before any public release.
 
 ### Not planned
 - Confidential mode, Chat/Meet/Spaces: Google services, not mail.
