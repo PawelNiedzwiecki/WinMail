@@ -3,6 +3,8 @@ import { stripPrefixes } from '@shared/subject'
 import { chipsFromAddresses, type Chip } from './addresses'
 import { QUOTE_STYLE } from './outgoing'
 import { escapeHtml, sanitizeHtml, textToHtml } from './sanitize'
+import { cleanedText } from '@shared/trackers'
+import { shieldHtml } from '../trackerShield'
 import type { ReplyMode } from './sessions'
 
 export const subjectFor = (mode: ReplyMode, subject: string) =>
@@ -47,8 +49,9 @@ export function replyRecipients(
 
 /** The message's own content for quoting: its HTML cleaned for the editor, or its text. */
 function original(summary: MessageSummary, detail: MessageDetail | null, allowRemote: boolean): string {
-  if (detail?.html) return sanitizeHtml(detail.html, { blockRemote: !allowRemote })
-  return textToHtml(detail?.text ?? summary.preview)
+  // The Tracker shield runs first, so a Tracking pixel in the original is never sent on with the reply.
+  if (detail?.html) return sanitizeHtml(shieldHtml(detail.html).html, { blockRemote: !allowRemote })
+  return textToHtml(cleanedText(detail?.text ?? summary.preview))
 }
 
 /** Gmail's quote markup, so Gmail users get "Show trimmed content" for it too. */

@@ -1356,6 +1356,94 @@ textarea {
 .remote-banner .btn {
   flex-shrink: 0;
 }
+/* Tracker shield notice: the remote-content notice's quiet look, with Details that opens a short list. */
+.tracker-banner {
+  margin-top: 12px;
+  padding: 5px 5px 5px 12px;
+  border-radius: 10px;
+  font-size: 12px;
+  color: var(--text-2);
+  background: var(--surface-alt);
+  border: 1px solid var(--hairline);
+}
+.tracker-banner-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 22px;
+}
+.tracker-banner-row > svg {
+  flex-shrink: 0;
+  color: var(--text-3);
+}
+.tracker-banner-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tracker-banner-toggle {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  height: 22px;
+  padding: 0 6px 0 8px;
+  border-radius: 6px;
+  font-size: 12px;
+  color: var(--text-2);
+  cursor: pointer;
+  transition: background-color 120ms ease;
+}
+.tracker-banner-toggle:hover {
+  background: var(--hover);
+}
+.tracker-banner-toggle:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 35%, transparent);
+}
+.tracker-banner-toggle svg {
+  transition: transform 160ms ease;
+}
+.tracker-banner-toggle svg.is-open {
+  transform: rotate(180deg);
+}
+.tracker-details {
+  margin: 4px 0 3px;
+  padding: 0 8px 0 22px;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  line-height: 1.4;
+  color: var(--text-2);
+}
+.tracker-details li::before {
+  content: '·';
+  margin-left: -10px;
+  padding-right: 6px;
+  color: var(--text-3);
+}
+/* A marked link in a plain-text message: the same ring the HTML view puts after a marked link. */
+.tracked-link::after {
+  content: '';
+  display: inline-block;
+  width: 0.5em;
+  height: 0.5em;
+  margin-left: 0.3em;
+  border: 1.5px solid currentColor;
+  border-radius: 50%;
+  background: radial-gradient(circle, currentColor 0 28%, transparent 32%);
+  opacity: 0.55;
+  vertical-align: 0.05em;
+}
+@media (prefers-reduced-motion: reduce) {
+  .tracker-banner-toggle,
+  .tracker-banner-toggle svg {
+    transition: none;
+  }
+}
 /* Mailing-list card: accent-tinted like the AI summary, with a real primary action and a dismiss. */
 .list-banner {
   display: flex;

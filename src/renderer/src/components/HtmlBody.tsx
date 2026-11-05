@@ -22,6 +22,19 @@ const BASE_CSS = `
   }
   img { max-width: 100%; height: auto; }
   a { color: #0066cc; }
+  /* A link the Tracker shield could not clean: a small ring after its text. The reason is in its title. */
+  a[data-winmail-tracked="text"]::after {
+    content: '';
+    display: inline-block;
+    width: 0.5em;
+    height: 0.5em;
+    margin-left: 0.3em;
+    border: 1.5px solid currentColor;
+    border-radius: 50%;
+    background: radial-gradient(circle, currentColor 0 28%, transparent 32%);
+    opacity: 0.55;
+    vertical-align: 0.05em;
+  }
   blockquote { margin-left: 0; padding-left: 12px; border-left: 2px solid #c7c7cc; color: #555; }
 `
 

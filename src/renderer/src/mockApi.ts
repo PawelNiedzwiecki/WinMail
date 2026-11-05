@@ -117,6 +117,8 @@ export function createMockApi(): WinMailApi {
   const isLabelBox = (id: string, path: string) =>
     isGmail(id) && (boxes[id] ?? []).some((b) => b.path === path && !b.specialUse)
 
+  const b64url = (v: string) => btoa(v).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
+
   let uid = 100
   const msg = (
     accountId: string,
@@ -167,6 +169,24 @@ export function createMockApi(): WinMailApi {
         unsubscribe: { url: 'https://northwind.example/unsubscribe', oneClick: true },
         labels: ['Receipts']
       }),
+    // Pixels and tracked links for the Tracker shield: two pixels (Mailchimp's and a hidden one), a real remote image,
+    // and links that are cleaned, unwrapped (Google, Substack) and marked (a Mailchimp click link, used twice).
+    msg('gmail', 'INBOX', ['Contoso Weekly', 'news@contoso.example'], 'Contoso Weekly: offline mode and a London meetup',
+      'Hi Alex, here is what happened this week at Contoso.', 5, {
+        html: `<div style="font-family:sans-serif;max-width:560px"><h2 style="color:#14233c">Contoso Weekly</h2>
+<div style="width:520px;max-width:100%;height:110px;background:#dbe4f3;margin:0 0 12px"><img src="https://images.example.com/contoso/hero.jpg" width="520" height="110" alt="Offline mode" style="max-width:100%"></div>
+<p>Hi Alex, here is what happened this week.</p>
+<p><a href="https://contoso.example/blog/offline-mode?utm_source=newsletter&utm_medium=email&utm_campaign=weekly&mc_eid=ab12cd34&ref=weekly">How offline mode works</a></p>
+<p><a href="https://www.google.com/url?q=https%3A%2F%2Fcontoso.example%2Fevents%2Flondon-meetup%3Futm_source%3Dnews&sa=D&usg=AOvVaw0x">Join the London meetup</a></p>
+<p><a href="https://substack.com/redirect/2/${b64url(JSON.stringify({ e: 'https://contoso.example/notes/editor', p: 1 }))}.sig">A note from the editor</a></p>
+<p><a href="https://contoso.us12.list-manage.com/track/click?u=1234567890abcdef&id=0a1b2c3d4e&e=5f6a7b8c9d">See the full roadmap</a> &middot; <a href="https://contoso.us12.list-manage.com/track/click?u=1234567890abcdef&id=0a1b2c3d4e&e=5f6a7b8c9d">roadmap again</a></p>
+<p style="color:#666;font-size:12px">You are getting this because you signed up at contoso.example.</p>
+<img src="https://contoso.us12.list-manage.com/track/open.php?u=1234567890abcdef&id=0a1b2c3d4e&e=5f6a7b8c9d" width="1" height="1" alt="">
+<img src="https://stats.contoso.example/px.gif?m=5521" alt="" style="display:none"></div>`,
+        unsubscribe: { url: 'https://contoso.us12.list-manage.com/unsubscribe?u=1234567890abcdef&id=0a1b2c3d4e', oneClick: false }
+      }),
+    msg('icloud', 'INBOX', ['Sam Patel', 'sam.patel@example.org'], 'Worth a read: offline-first mail',
+      'Hey Alex,\n\nThis is the post I mentioned: https://blog.example.org/offline-first-mail?utm_source=twitter&utm_medium=social&fbclid=IwAR0abc123 and the talk is here https://l.facebook.com/l.php?u=https%3A%2F%2Fexample.org%2Ftalks%2F42%3Futm_campaign%3Dshare&h=AT0x\n\nSam', 18),
     msg('gmail', 'INBOX', ['GitHub', 'noreply@github.com'], '[sample-app] PR #42: Offline caching',
       'Review requested. 14 files changed, 612 additions, 88 deletions.\n\nhttps://github.com/example/sample-app/pull/42', 300, {
         seen: true, hasAttachments: true, labels: ['Work'],

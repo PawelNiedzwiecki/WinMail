@@ -1,6 +1,8 @@
 import DOMPurify from 'dompurify'
 import type { Address, MessageDetail } from '@shared/types'
 import { formatFullDate } from './format'
+import { cleanedText } from '@shared/trackers'
+import { shieldHtml } from './trackerShield'
 
 const esc = (s: string) =>
   s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!)
@@ -21,9 +23,10 @@ export function printDocument(d: MessageDetail, allowRemote: boolean): string {
     ['Date', formatFullDate(d.date)],
     ['Subject', d.subject]
   ]
+  // Printing keeps the Tracker shield's work: no Tracking pixels, cleaned links.
   const body = d.html
-    ? DOMPurify.sanitize(d.html, { FORBID_TAGS: ['form', 'input', 'button'] })
-    : `<pre class="text">${esc(d.text)}</pre>`
+    ? DOMPurify.sanitize(shieldHtml(d.html).html, { FORBID_TAGS: ['form', 'input', 'button'] })
+    : `<pre class="text">${esc(cleanedText(d.text))}</pre>`
   return `<!doctype html><html><head><meta charset="utf-8">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src ${img}; style-src 'unsafe-inline'">
 <title>${esc(d.subject)}</title>
