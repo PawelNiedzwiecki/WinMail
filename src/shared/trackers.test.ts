@@ -39,6 +39,17 @@ describe('findTrackingPixel', () => {
     expect(findTrackingPixel({ src: 'https://news.example/pixel', width: '300', height: '200' })).toBeNull()
   })
 
+  it('keeps real images that merely sit in a directory named like a tracker', () => {
+    expect(findTrackingPixel({ src: 'https://cdn.shop.example/tracking/map.png' })).toBeNull()
+    expect(findTrackingPixel({ src: 'https://cdn.shop.example/pixel/logo.png' })).toBeNull()
+    expect(findTrackingPixel({ src: 'https://cdn.shop.example/track/route.jpg' })).toBeNull()
+    // but the open-tracking shapes of those directories still are pixels
+    expect(findTrackingPixel({ src: 'https://x.example/pixel' })).not.toBeNull()
+    expect(findTrackingPixel({ src: 'https://x.example/beacon/abc123' })).not.toBeNull()
+    expect(findTrackingPixel({ src: 'https://x.example/pixel/a.gif' })).not.toBeNull()
+    expect(findTrackingPixel({ src: 'https://github.com/notifications/beacon/AB12.gif' })?.service).toBe('GitHub')
+  })
+
   it('catches white-labelled SendGrid and Amazon SES addresses', () => {
     expect(findTrackingPixel({ src: 'https://links.brand.example/wf/open?upn=abc123' })?.service).toBe('SendGrid')
     expect(findTrackingPixel({ src: 'https://r.eu-west-1.awstrack.me/I0/0102abc/def', width: '5' })?.service).toBe('Amazon SES')
@@ -106,6 +117,9 @@ describe('cleanLink: unwrapping', () => {
     expect(cleanLink(sub)).toMatchObject({ change: 'unwrapped', href: cleaned, service: 'Substack' })
     const ses = `https://r.us-east-1.awstrack.me/L0/${encodeURIComponent(dest)}/1/0100/abc-def`
     expect(cleanLink(ses)).toMatchObject({ change: 'unwrapped', href: cleaned, service: 'Amazon SES' })
+    // What SES really writes: a literal colon, then encoded slashes.
+    const sesReal = 'https://r.us-east-2.awstrack.me/L0/https:%2F%2Fexample.org%2Farticle%3Fid=7%26utm_source=x/1/0100abc-def'
+    expect(cleanLink(sesReal)).toMatchObject({ change: 'unwrapped', href: cleaned, service: 'Amazon SES' })
     const mj = `https://x.mjt.lu/lnk/AAA/BBB/1/C/${'D'}?url=${encodeURIComponent(dest)}`
     expect(cleanLink(mj)).toMatchObject({ change: 'unwrapped', href: cleaned, service: 'Mailjet' })
     const b64 = `https://email.mg.example.mailgun.org/c/abc?target=${b64url(dest)}`
@@ -150,6 +164,20 @@ describe('cleanLink: marked links', () => {
     expect(cleanLink('https://u123.ct.sendgrid.net/ls/click?upn=abc').service).toBe('SendGrid')
     expect(cleanLink('https://links.brand.example/ls/click?upn=abc').change).toBe('marked')
     expect(cleanLink('https://abc.hubspotlinks.com/Ctc/ZR+113/abc').service).toBe('HubSpot')
+  })
+
+  it('marks every link on hosts that exist only to count clicks', () => {
+    expect(cleanLink('https://click.convertkit-mail2.com/abc/def/ghi').service).toBe('ConvertKit')
+    expect(cleanLink('https://via.intercom-clicks.com/anything/at/all').service).toBe('Intercom')
+  })
+
+  it('does not mark HubSpot’s own site, only its link and mail hosts', () => {
+    expect(cleanLink('https://www.hubspot.com/Doc/guide').change).toBe('none')
+    expect(cleanLink('https://blog.hubspot.com/Ctc/not-a-tracker').change).toBe('none')
+    expect(cleanLink('https://abc.hubspotlinks.com/Ctc/ZR+113/abc').change).toBe('marked')
+    expect(cleanLink('https://abc.hubspotemail.net/e2t/c/*abc').change).toBe('marked')
+    // its pixel is still recognised on any host
+    expect(findTrackingPixel({ src: 'https://track.brand.example/__ptq.gif?a=1', width: '50' })?.service).toBe('HubSpot')
   })
 
   it('does not mark a service’s ordinary pages', () => {

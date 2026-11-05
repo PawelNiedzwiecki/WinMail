@@ -59,7 +59,9 @@ const SERVICES: TrackingService[] = [
   },
   {
     name: 'HubSpot',
-    hosts: ['hubspotlinks.com', 'hubspotemail.net', 'hubspot.com'],
+    // Only its tracking hosts: hubspot.com is also the company's own website. Its sales-tool pixel is told by shape.
+    hosts: ['hubspotlinks.com', 'hubspotemail.net'],
+    signature: /^\/__ptq\.gif/i,
     pixel: /^\/(?:e2t\/o\/|__ptq\.gif)/i,
     click: /^\/(?:e2t\/c\/|[A-Z][a-z]c\/)/
   },
@@ -205,7 +207,8 @@ function decodeBase64(s: string): string | null {
 /** The value as a web address if it is one, plain, percent-encoded once more, or base64; else null. */
 function asHttpUrl(value: string): string | null {
   let v = value.trim()
-  if (/^https?%3A/i.test(v)) {
+  // Encoded once more: "https%3A%2F%2F…", or what Amazon SES writes, a literal colon and encoded slashes.
+  if (/^https?%3A/i.test(v) || /^https?:%2F%2F/i.test(v)) {
     try {
       v = decodeURIComponent(v)
     } catch {
@@ -254,7 +257,8 @@ const GENERIC_PIXEL_PATH = new RegExp(
   [
     '\\/(?:track(?:ing)?\\/)?(?:email\\/)?opens?(?:\\/|\\.(?:gif|php|aspx?)$|$)',
     '\\/(?:o|pixel|beacon|px|trk|tracker|spacer)\\.(?:gif|png)$',
-    '\\/(?:pixel|beacon|tracking?)(?:\\/|$)',
+    // A tracker directory counts only when what is in it looks like a tracker: a bare token or a .gif, not map.png.
+    '\\/(?:pixel|beacon|tracking?)(?:\\/(?:[^/.]*|[^/]*\\.gif))?$',
     '\\/wf\\/open$'
   ].join('|'),
   'i'
@@ -331,7 +335,10 @@ function isTrackingParam(name: string, host: string): boolean {
   return SITE_PARAMS.some((s) => s.host.test(host) && s.params.has(n))
 }
 
-/** Removes tracking parameters, leaving every other part of the address as written. Returns null if none. */
+/**
+ * Removes tracking parameters, leaving the other parameters as the URL parser wrote them. Returns null if none.
+ * The address is rebuilt by splicing the new query in, so nothing else is touched.
+ */
 function stripParams(u: URL): URL | null {
   if (!u.search) return null
   const parts = u.search.slice(1).split('&')
@@ -346,9 +353,8 @@ function stripParams(u: URL): URL | null {
     return !isTrackingParam(decoded, u.hostname)
   })
   if (kept.length === parts.length) return null
-  const out = new URL(u.href)
-  out.search = kept.length ? '?' + kept.join('&') : ''
-  return out
+  const head = u.href.slice(0, u.href.length - u.search.length - u.hash.length)
+  return new URL(head + (kept.length ? '?' + kept.join('&') : '') + u.hash)
 }
 
 interface Step {

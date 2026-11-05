@@ -61,6 +61,7 @@ export function shieldHtml(html: string): { html: string; report: TrackerReport 
     a.setAttribute('data-winmail-tracked', a.textContent?.trim() ? 'text' : 'image')
   })
 
+  // outerHTML leaves out the doctype, which is harmless: the body goes through DOMPurify next, which drops it too.
   return changed ? { html: doc.documentElement.outerHTML, report } : { html, report }
 }
 
