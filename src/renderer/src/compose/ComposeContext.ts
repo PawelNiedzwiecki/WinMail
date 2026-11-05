@@ -7,7 +7,10 @@ export interface ComposeCtx {
   /** Enabled accounts. */
   accounts: Account[]
   settings: Settings
-  /** A Claude API key is saved, so replies can offer "Suggest a reply". */
+  /**
+   * A Claude API key is saved, so replies show "Suggest a reply". The key alone sends nothing: whether it may send
+   * the message is `settings.contentOptIns.reply` (ADR 0001).
+   */
   aiAvailable: boolean
 }
 

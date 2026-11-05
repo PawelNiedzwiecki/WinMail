@@ -1,5 +1,6 @@
 import Anthropic from '@anthropic-ai/sdk'
 import type { AiInput, MailQuery } from '../shared/types'
+import { assertOptedIn } from '../shared/contentFeatures'
 import type { Store } from './store'
 
 const MODEL = 'claude-opus-5-5'
@@ -17,8 +18,12 @@ const SYSTEM: Record<AiInput['task'], string> = {
     'line, greeting-only lines are fine, no signature.'
 }
 
-/** Summaries and suggested replies with the user's own Claude API key. */
+/**
+ * Summaries and suggested replies with the user's own Claude API key. These send message content, so each task is
+ * refused here unless its Content opt-in is on (ADR 0001); hiding the buttons is not enough.
+ */
 export async function runAi(store: Store, input: AiInput): Promise<string> {
+  assertOptedIn(store.getSettings(), input.task)
   const body = input.text.length > MAX_INPUT_CHARS ? `${input.text.slice(0, MAX_INPUT_CHARS)}\n[…]` : input.text
   const response = await request(store, {
     max_tokens: 4000,
@@ -149,7 +154,7 @@ type Params = Pick<Anthropic.Beta.MessageCreateParamsNonStreaming, 'max_tokens' 
 /** One Claude call with the saved key; API errors come back as messages for the user. */
 async function request(store: Store, params: Params): Promise<Anthropic.Beta.BetaMessage> {
   const apiKey = store.getAiKey()
-  if (!apiKey) throw new Error('Add a Claude API key in Settings > General first.')
+  if (!apiKey) throw new Error('Add a Claude API key in Settings > Claude first.')
   const client = new Anthropic({ apiKey })
   let response: Anthropic.Beta.BetaMessage
   try {
@@ -162,7 +167,7 @@ async function request(store: Store, params: Params): Promise<Anthropic.Beta.Bet
       ...params
     })
   } catch (err) {
-    if (err instanceof Anthropic.AuthenticationError) throw new Error('The Claude API key was rejected. Check it in Settings > General.')
+    if (err instanceof Anthropic.AuthenticationError) throw new Error('The Claude API key was rejected. Check it in Settings > Claude.')
     if (err instanceof Anthropic.RateLimitError) throw new Error('Claude is rate limited right now. Try again in a minute.')
     if (err instanceof Anthropic.APIConnectionError) throw new Error('Could not reach Claude. Check your connection.')
     if (err instanceof Anthropic.APIError) throw new Error(`Claude returned an error: ${err.message}`)

@@ -41,11 +41,12 @@ import {
   type Settings,
   type Unsubscribe
 } from '@shared/types'
+import { optedIn } from '@shared/contentFeatures'
 import { categorize } from '@shared/categorize'
 import { api } from './api'
 import { Sidebar, inboxPath, type Selection } from './components/Sidebar'
 import { MessageList } from './components/MessageList'
-import { MessageView } from './components/MessageView'
+import { MessageView, type AiSummaryState } from './components/MessageView'
 import { Toolbar } from './components/Toolbar'
 import { AiSearchBar } from './components/AiSearchBar'
 import { ActionBar } from './components/ActionBar'
@@ -309,7 +310,7 @@ export default function App() {
   const [scheduled, setScheduled] = useState<ScheduledInfo[]>([])
   /** Messages of the open Gmail conversation from other folders, e.g. your replies in Sent. */
   const [threadExtra, setThreadExtra] = useState<{ key: string; list: MessageSummary[] } | null>(null)
-  const [aiSummary, setAiSummary] = useState<{ key: string; text: string | null; error: string | null } | null>(null)
+  const [aiSummary, setAiSummary] = useState<AiSummaryState | null>(null)
   /** Takes back the last move, for the z shortcut. */
   const lastUndo = useRef<(() => void) | null>(null)
   /** A message to select once the list has loaded, e.g. from a notification. */
@@ -1292,6 +1293,8 @@ export default function App() {
   const summarise = async () => {
     if (!detail) return
     const key = detail.key
+    // Without its Content opt-in nothing is sent; the panel points to the switch instead (ADR 0001).
+    if (!optedIn(settings, 'summarise')) return setAiSummary({ key, text: null, error: null, off: true })
     setAiSummary({ key, text: null, error: null })
     try {
       const text = await api.ai({
@@ -1481,6 +1484,10 @@ export default function App() {
       .then(setAiAvailable)
       .catch(() => setAiAvailable(false))
   }, [settingsTab])
+  // Summarise was switched on in Settings: the "it is off" panel has done its job.
+  useEffect(() => {
+    if (aiSummary?.off && optedIn(settings, 'summarise')) setAiSummary(null)
+  }, [settings.contentOptIns])
   // The key was removed in Settings: back to normal search.
   useEffect(() => {
     if (!aiAvailable && aiMode) switchAiMode(false)
@@ -1789,6 +1796,7 @@ export default function App() {
               moreItems={moreItems}
               aiSummary={aiSummary && aiSummary.key === selected?.key ? aiSummary : null}
               onCloseSummary={() => setAiSummary(null)}
+              onOpenAiSettings={() => setSettingsTab('ai')}
               onUnsubscribe={unsubscribe}
               onAnswerInvite={answerInvite}
               onOpenInvite={openInvite}

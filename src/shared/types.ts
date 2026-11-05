@@ -1,3 +1,5 @@
+import { NO_OPT_INS, type ContentFeatureId, type ContentOptIns } from './contentFeatures'
+
 export type Security = 'tls' | 'starttls' | 'none'
 
 export interface ServerConfig {
@@ -288,7 +290,8 @@ export interface OpenMessageEvent {
   uid: number
 }
 
-export type AiTask = 'summarise' | 'reply'
+/** Claude tasks that send message content; each is a declared Content opt-in. */
+export type AiTask = ContentFeatureId
 
 export interface AiInput {
   task: AiTask
@@ -378,6 +381,8 @@ export interface Settings {
   /** Turn animations off in the app; Windows' own "Animation effects" setting also applies. */
   reduceMotion: boolean
   templates: Template[]
+  /** Which Claude features may send message content (ADR 0001); all off by default. */
+  contentOptIns: ContentOptIns
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -403,7 +408,8 @@ export const DEFAULT_SETTINGS: Settings = {
   confirmDelete: false,
   composeFormat: 'rich',
   reduceMotion: false,
-  templates: []
+  templates: [],
+  contentOptIns: NO_OPT_INS
 }
 
 export interface TestResult {

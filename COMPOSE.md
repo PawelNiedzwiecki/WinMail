@@ -19,7 +19,7 @@ Replace the centered, blocking Apple Mail-style compose dialog with Gmail's comp
 | Undo send | Delay from `undoSendSec` (default 10 s), run by the main-process Outbox so it survives a quit or crash. |
 | Replies | Reply, Reply all and Forward open inline under the message; pop out to a docked card; quote folded behind `···`. |
 | Signatures | One per account (plain-text `Account.signature`), with `-- ` in new mail only, above the quote in replies, swapped on From change if unedited. |
-| Extras | Schedule send (Send ▾), Templates (More ⋮), AI suggested reply (inline replies, needs a Claude key), emoji (Windows panel), spellcheck right-click menu. |
+| Extras | Schedule send (Send ▾), Templates (More ⋮), AI suggested reply (inline replies; needs a Claude key and its Content opt-in in Settings > Claude), emoji (Windows panel), spellcheck right-click menu. |
 
 Full plan: `C:\Users\ivell\.claude\plans\i-want-to-improve-tranquil-nova.md`.
 

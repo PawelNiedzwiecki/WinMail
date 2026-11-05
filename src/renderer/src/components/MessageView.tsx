@@ -38,6 +38,15 @@ import { InviteCard } from './InviteCard'
 import { InlineReply } from './compose/InlineReply'
 import { UnsubscribeDialog } from './UnsubscribeDialog'
 
+/** The summary panel: asked for (text null), shown, failed, or turned away because Summarise's opt-in is off. */
+export interface AiSummaryState {
+  key: string
+  text: string | null
+  error: string | null
+  /** Summarise's Content opt-in is off: nothing was sent, the panel points to Settings. */
+  off?: boolean
+}
+
 interface Props {
   summary: MessageSummary | null
   detail: MessageDetail | null
@@ -60,8 +69,10 @@ interface Props {
   /** The "…" menu: print, show original, summarise, move, snooze. */
   moreItems?: () => MenuItem[]
   /** AI summary of this message, while asked for or shown. */
-  aiSummary?: { text: string | null; error: string | null } | null
+  aiSummary?: AiSummaryState | null
   onCloseSummary?: () => void
+  /** Opens Settings > Claude, where Summarise's Content opt-in is. */
+  onOpenAiSettings?: () => void
   onUnsubscribe?: (u: Unsubscribe) => void
   /** RSVP to the message's calendar invitation; rejects when it couldn't be sent. */
   onAnswerInvite?: (answer: InviteAnswer) => Promise<void>
@@ -94,6 +105,7 @@ export function MessageView({
   moreItems,
   aiSummary: ai,
   onCloseSummary,
+  onOpenAiSettings,
   onUnsubscribe,
   onAnswerInvite,
   onOpenInvite,
@@ -207,11 +219,25 @@ export function MessageView({
               <div className="ai-summary-head">
                 <Sparkles size={14} />
                 <span>Summary</span>
+                {!ai.off && (
+                  <span className="ai-sent" title="The sender, subject and text of this message were sent to Claude">
+                    Sent to Claude
+                  </span>
+                )}
                 <button className="sq-btn" title="Close" aria-label="Close summary" onClick={onCloseSummary}>
                   <X size={13} />
                 </button>
               </div>
-              {ai.error ? (
+              {ai.off ? (
+                <div className="ai-summary-off">
+                  <span>Summarise sends this message to Claude, so it is off until you turn it on.</span>
+                  {onOpenAiSettings && (
+                    <button className="btn" onClick={onOpenAiSettings}>
+                      Turn on in Settings
+                    </button>
+                  )}
+                </div>
+              ) : ai.error ? (
                 <div className="ai-summary-error">{ai.error}</div>
               ) : ai.text === null ? (
                 <div className="ai-summary-loading">

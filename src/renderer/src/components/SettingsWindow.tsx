@@ -20,6 +20,7 @@ import { motion } from 'motion/react'
 import { useEffect, useState, type ReactNode } from 'react'
 import { Backdrop, panelExit, useModalEscape } from './Backdrop'
 import type { Account, AccountLabels, Appearance, ComposeFormat, ContactsStatus, ListDensity, MessageAppearance, Settings } from '@shared/types'
+import { CONTENT_FEATURES, CONTENT_FEATURE_IDS } from '@shared/contentFeatures'
 import { getProvider } from '@shared/providers'
 import { api } from '../api'
 import { formatSize } from '../format'
@@ -96,7 +97,7 @@ export function SettingsWindow(p: Props) {
               <LabelsPage accounts={p.accounts} labelSets={p.labelSets} onChanged={p.onLabelsChanged} />
             )}
             {page.id === 'shortcuts' && <ShortcutsPage settings={p.settings} onChange={p.onSettings} />}
-            {page.id === 'ai' && <AiPage />}
+            {page.id === 'ai' && <AiPage settings={p.settings} onChange={p.onSettings} />}
             {page.id === 'accounts' && (
               <AccountsPane accounts={p.accounts} onAdd={p.onAddAccount} onChanged={p.onAccountsChanged} />
             )}
@@ -373,8 +374,11 @@ function ShortcutsPage({ settings, onChange }: PageProps) {
   )
 }
 
-/** Claude API key for Summarise and Suggest reply; stored encrypted, never shown again. */
-function AiPage() {
+/**
+ * The Claude API key (stored encrypted, never shown again) and one Content opt-in per feature that sends message
+ * content (ADR 0001). The switches come from `CONTENT_FEATURES`, so a newly declared feature appears here by itself.
+ */
+function AiPage({ settings, onChange }: PageProps) {
   const [saved, setSaved] = useState<boolean | null>(null)
   const [key, setKey] = useState('')
   const [error, setError] = useState<string | null>(null)
@@ -393,37 +397,54 @@ function AiPage() {
   }
   // Not inside a <label>: a label would pass clicks on the text to the Remove button.
   return (
-    <Group title="Anthropic API key">
-      <Item
-        stack
-        title={saved ? 'API key saved' : 'Use Claude in WinMail'}
-        description="Summarise messages and suggest replies with your own Anthropic API key. The message text is sent to Anthropic only when you ask. The key is stored encrypted on this PC and is never shown again."
-      >
-        {saved ? (
-          <button className="btn" onClick={() => save(null)}>
-            Remove key
-          </button>
-        ) : (
-          <span className="st-key-form">
-            <input
-              type="password"
-              className="st-input"
-              placeholder="sk-ant-…"
-              aria-label="Anthropic API key"
-              value={key}
-              autoComplete="off"
-              spellCheck={false}
-              onChange={(e) => setKey(e.target.value)}
-              onKeyDown={(e) => e.key === 'Enter' && key.trim() && save(key)}
-            />
-            <button className="btn btn-primary" disabled={!key.trim()} onClick={() => save(key)}>
-              Save
+    <>
+      <Group title="Anthropic API key">
+        <Item
+          stack
+          title={saved ? 'API key saved' : 'Use Claude in WinMail'}
+          description="Use Claude with your own Anthropic API key. The key alone sends no mail: each feature that sends message content has its own switch below. AI search sends only your question. The key is stored encrypted on this PC and is never shown again."
+        >
+          {saved ? (
+            <button className="btn" onClick={() => save(null)}>
+              Remove key
             </button>
-          </span>
-        )}
-        {error && <div className="form-error">{error}</div>}
-      </Item>
-    </Group>
+          ) : (
+            <span className="st-key-form">
+              <input
+                type="password"
+                className="st-input"
+                placeholder="sk-ant-…"
+                aria-label="Anthropic API key"
+                value={key}
+                autoComplete="off"
+                spellCheck={false}
+                onChange={(e) => setKey(e.target.value)}
+                onKeyDown={(e) => e.key === 'Enter' && key.trim() && save(key)}
+              />
+              <button className="btn btn-primary" disabled={!key.trim()} onClick={() => save(key)}>
+                Save
+              </button>
+            </span>
+          )}
+          {error && <div className="form-error">{error}</div>}
+        </Item>
+      </Group>
+      <Group title="Send message content to Claude">
+        {CONTENT_FEATURE_IDS.map((id) => (
+          <Item
+            key={id}
+            title={CONTENT_FEATURES[id].title}
+            description={`${CONTENT_FEATURES[id].sends} Only when you ask${saved === false ? '; needs an API key above' : ''}.`}
+          >
+            <Switch
+              label={`Let ${CONTENT_FEATURES[id].title} send message content to Claude`}
+              checked={settings.contentOptIns[id]}
+              onChange={(on) => onChange({ ...settings, contentOptIns: { ...settings.contentOptIns, [id]: on } })}
+            />
+          </Item>
+        ))}
+      </Group>
+    </>
   )
 }
 

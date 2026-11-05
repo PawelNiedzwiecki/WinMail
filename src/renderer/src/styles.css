@@ -2593,6 +2593,23 @@ textarea {
 .ai-summary-error {
   color: var(--danger);
 }
+/* "Sent to Claude": message content left the PC for this (ADR 0001). */
+.ai-sent {
+  padding: 1px 7px;
+  border-radius: 999px;
+  border: 1px solid var(--hairline);
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-2);
+}
+.ai-summary-off {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  margin-top: 6px;
+  color: var(--text-2);
+}
 
 @media (prefers-reduced-motion: reduce) {
   .dialog {
