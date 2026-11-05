@@ -54,6 +54,14 @@ _Avoid_: Spy pixel, beacon, remote image (most remote images are not trackers)
 A link that passes through the sender's click-counting service or carries tracking parameters before reaching its destination.
 _Avoid_: Redirect, unsafe link
 
+**Tracking pixel**:
+An image whose only job is to tell the sender the message was opened, usually tiny or hidden. A real picture is not one, even when it is hosted by the same service.
+_Avoid_: Spy pixel, beacon, web bug
+
+**Tracking service**:
+The company that counts a sender's opens or clicks, such as Mailchimp. The banner names it, or names the pixel's host when WinMail does not know it.
+_Avoid_: ESP, vendor
+
 ### Claude
 
 **Content opt-in**:

@@ -15,7 +15,7 @@ import {
   Tag
 } from 'lucide-react'
 import { AnimatePresence } from 'motion/react'
-import { useEffect, useState, type ReactNode } from 'react'
+import { Fragment, useEffect, useMemo, useState } from 'react'
 import type {
   Address,
   InviteAnswer,
@@ -25,6 +25,7 @@ import type {
   MessageSummary,
   Unsubscribe
 } from '@shared/types'
+import { markedTitle, type TextPart } from '@shared/trackers'
 import { LabelChips } from './LabelChips'
 import { api } from '../api'
 import { Collapse } from './Collapse'
@@ -37,6 +38,8 @@ import { HtmlBody, hasRemoteContent } from './HtmlBody'
 import { InviteCard } from './InviteCard'
 import { InlineReply } from './compose/InlineReply'
 import { UnsubscribeDialog } from './UnsubscribeDialog'
+import { TrackerBanner } from './TrackerBanner'
+import { shieldMessage } from '../trackerShield'
 
 interface Props {
   summary: MessageSummary | null
@@ -108,6 +111,8 @@ export function MessageView({
   // The list banner stays closed for the message it was dismissed (or unsubscribed) on.
   const [listHidden, setListHidden] = useState<string | null>(null)
   const [confirmUnsub, setConfirmUnsub] = useState(false)
+  // Tracking pixels out and links cleaned before anything is shown (see trackerShield.ts).
+  const shield = useMemo(() => (detail ? shieldMessage(detail) : null), [detail])
 
   if (multiCount > 1) {
     return (
@@ -128,7 +133,9 @@ export function MessageView({
   }
 
   const m = detail ?? summary
-  const remote = detail?.html ? hasRemoteContent(detail.html) : false
+  // Asked after the pixels are gone: a message whose only remote image was a pixel has nothing to load.
+  const remote = shield?.html ? hasRemoteContent(shield.html) : false
+  const trackerCount = shield ? shield.report.pixels.length + shield.report.links.length : 0
   const sender = m.from.name || m.from.email
 
   return (
@@ -261,6 +268,10 @@ export function MessageView({
           )}
         </AnimatePresence>
 
+        <Collapse key={`tracker-${summary.key}`} open={trackerCount > 0}>
+          {shield && <TrackerBanner report={shield.report} />}
+        </Collapse>
+
         <Collapse key={`remote-${summary.key}`} open={remote && !allowRemote}>
           <div className="remote-banner">
             <ImageOff size={14} />
@@ -297,16 +308,17 @@ export function MessageView({
         {!detail && !error && <MessageSkeleton />}
 
         {detail &&
-          (detail.html ? (
+          shield &&
+          (shield.html !== null ? (
             <div className={`msg-body-html ${dark ? 'is-dark' : ''}`}>
-              <HtmlBody html={detail.html} allowRemote={allowRemote} dark={dark} />
+              <HtmlBody html={shield.html} allowRemote={allowRemote} dark={dark} />
             </div>
           ) : (
             // Plain text follows the app unless the setting asks for the other look.
             <article
               className={`msg-body ${dark === appDark ? '' : `msg-body-card ${dark ? 'is-dark' : 'is-light'}`}`}
             >
-              {linkify(detail.text)}
+              <LinkifiedText parts={shield.parts ?? []} />
             </article>
           ))}
 
@@ -360,6 +372,7 @@ function ThreadItem({ m, allowRemote, dark, appDark }: { m: MessageSummary; allo
   const [open, setOpen] = useState(false)
   const [detail, setDetail] = useState<MessageDetail | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const shield = useMemo(() => (detail ? shieldMessage(detail) : null), [detail])
 
   useEffect(() => {
     if (!open || detail) return
@@ -386,13 +399,14 @@ function ThreadItem({ m, allowRemote, dark, appDark }: { m: MessageSummary; allo
           {error && <div className="list-error">{error}</div>}
           {!detail && !error && <MessageSkeleton compact />}
           {detail &&
-            (detail.html ? (
+            shield &&
+            (shield.html !== null ? (
               <div className={`msg-body-html ${dark ? 'is-dark' : ''}`}>
-                <HtmlBody html={detail.html} allowRemote={allowRemote} dark={dark} />
+                <HtmlBody html={shield.html} allowRemote={allowRemote} dark={dark} />
               </div>
             ) : (
               <article className={`msg-body ${dark === appDark ? '' : `msg-body-card ${dark ? 'is-dark' : 'is-light'}`}`}>
-                {linkify(detail.text)}
+                <LinkifiedText parts={shield.parts ?? []} />
               </article>
             ))}
         </div>
@@ -401,16 +415,26 @@ function ThreadItem({ m, allowRemote, dark, appDark }: { m: MessageSummary; allo
   )
 }
 
-const URL_RE = /(https?:\/\/[^\s<>()]+[^\s<>().,;:!?'"])/g
-
-function linkify(text: string): ReactNode[] {
-  return text.split(URL_RE).map((part, i) =>
-    i % 2 === 1 ? (
-      <a key={i} href={part} target="_blank" rel="noopener noreferrer">
-        {part}
-      </a>
-    ) : (
-      part
-    )
+/** Plain text with its web addresses as links; links the shield marked say so on hover. */
+function LinkifiedText({ parts }: { parts: TextPart[] }) {
+  return (
+    <>
+      {parts.map((p, i) =>
+        'href' in p ? (
+          <a
+            key={i}
+            href={p.href}
+            target="_blank"
+            rel="noopener noreferrer"
+            className={p.change === 'marked' ? 'tracked-link' : undefined}
+            title={p.change === 'marked' ? markedTitle(p.via) : undefined}
+          >
+            {p.text}
+          </a>
+        ) : (
+          <Fragment key={i}>{p.text}</Fragment>
+        )
+      )}
+    </>
   )
 }
