@@ -15,6 +15,7 @@ import {
   type SendInput,
   type Settings
 } from '../shared/types'
+import { normaliseOptIns } from '../shared/contentFeatures'
 
 /** A snoozed message, found again by Message-ID when it is due. */
 export interface Snoozed {
@@ -78,6 +79,11 @@ const fresh = (): StoreFile => ({
   labels: {}
 })
 
+/** Saved settings over the defaults; Content opt-ins missing from an older file are off (ADR 0001). */
+function withDefaults(s: Partial<Settings> | undefined): Settings {
+  return { ...DEFAULT_SETTINGS, ...s, contentOptIns: normaliseOptIns(s?.contentOptIns) }
+}
+
 export class Store {
   private file = join(app.getPath('userData'), 'winmail.json')
   /** Attachment copies for scheduled mail. */
@@ -109,7 +115,7 @@ export class Store {
       version: 1,
       accounts: raw.accounts ?? [],
       secrets: raw.secrets ?? {},
-      settings: { ...DEFAULT_SETTINGS, ...raw.settings },
+      settings: withDefaults(raw.settings),
       snoozed: raw.snoozed ?? [],
       scheduled: raw.scheduled ?? [],
       labels: raw.labels ?? {}
@@ -179,7 +185,7 @@ export class Store {
   }
 
   setSettings(s: Settings): Settings {
-    this.data.settings = { ...DEFAULT_SETTINGS, ...s }
+    this.data.settings = withDefaults(s)
     this.save()
     return this.data.settings
   }

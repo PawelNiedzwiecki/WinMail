@@ -12,6 +12,7 @@ import {
 } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import type { Settings } from '@shared/types'
+import { optedIn, optInOffMessage } from '@shared/contentFeatures'
 import { api } from '../../api'
 import {
   deleteTemplate,
@@ -25,7 +26,7 @@ import {
   toggleSignature
 } from '../../compose/actions'
 import { formatWhen, schedulePresets } from '../../compose/schedule'
-import type { ComposeSession } from '../../compose/sessions'
+import { updateSession, type ComposeSession } from '../../compose/sessions'
 import { ContextMenu, type MenuItem } from '../ContextMenu'
 
 interface Props {
@@ -55,6 +56,7 @@ export function ComposeFooter(p: Props) {
   const s = p.session
   const [menu, setMenu] = useState<Menu | null>(null)
   const [thinking, setThinking] = useState(false)
+  const replyOn = optedIn(p.settings, 'reply')
   const sendRef = useRef<HTMLDivElement>(null)
   const moreRef = useRef<HTMLButtonElement>(null)
 
@@ -147,12 +149,19 @@ export function ComposeFooter(p: Props) {
         )}
       {s.reply && p.aiAvailable && (
         <button
-          className="ft-btn ft-optional"
-          title="Suggest a reply"
+          className={`ft-btn ft-optional${replyOn ? '' : ' is-disabled'}`}
+          title={replyOn ? 'Suggest a reply (sends this message to Claude)' : 'Turn on Suggest a reply in Settings > Claude'}
           aria-label="Suggest a reply"
           disabled={thinking}
           onMouseDown={noFocus}
           onClick={async () => {
+            // Off: nothing is sent; say where the switch is. A pop-out's settings date from when it opened, so ask again.
+            if (!replyOn) {
+              const fresh = await api.getSettings().catch(() => null)
+              if (!fresh || !optedIn(fresh, 'reply')) {
+                return updateSession(s.id, { banner: { tone: 'info', text: optInOffMessage('reply') } })
+              }
+            }
             setThinking(true)
             await suggestReply(s.id)
             setThinking(false)

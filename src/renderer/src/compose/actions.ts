@@ -871,7 +871,10 @@ export function deleteTemplate(templateId: string): void {
   env.setSettings({ ...env.settings, templates: env.settings.templates.filter((t) => t.id !== templateId) })
 }
 
-/** Asks Claude for a reply to the message being answered and puts it at the top of the body. */
+/**
+ * Asks Claude for a reply to the message being answered and puts it at the top of the body. Sends that message's
+ * sender, subject and text, so main refuses it unless Suggest a reply's Content opt-in is on.
+ */
 export async function suggestReply(id: string): Promise<void> {
   const s = getSession(id)
   const src = s?.reply
@@ -890,6 +893,8 @@ export async function suggestReply(id: string): Promise<void> {
     else root.insertAdjacentHTML('afterbegin', textToHtml(text))
     flush(id)
     autosave.touch(id)
+    // The visible marker ADR 0001 asks for: content left the PC for this.
+    updateSession(id, { banner: { tone: 'info', text: "Suggested by Claude · the message you're replying to was sent to Claude" } })
     editorOf(id)?.focus('start')
   } catch (e) {
     updateSession(id, { banner: { tone: 'error', text: errText(e) } })

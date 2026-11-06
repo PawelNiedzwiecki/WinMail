@@ -1,4 +1,5 @@
 // Browser-only stand-in for the Electron bridge, used for UI development.
+import { assertOptedIn } from '@shared/contentFeatures'
 import {
   DEFAULT_SETTINGS,
   type Account,
@@ -643,14 +644,16 @@ export function createMockApi(): WinMailApi {
     },
     async ai(input) {
       await sleep(900)
-      if (!aiKey) throw new Error('Add a Claude API key in Settings > General first.')
+      // Like runAi in main: no message content goes out while the feature's Content opt-in is off.
+      assertOptedIn(settings, input.task)
+      if (!aiKey) throw new Error('Add a Claude API key in Settings > Claude first.')
       return input.task === 'summarise'
         ? `• ${input.subject}\n• Mock summary of a message from ${input.from}.`
         : 'Thanks, that works for me. See you then.'
     },
     async aiSearch(question) {
       await sleep(700)
-      if (!aiKey) throw new Error('Add a Claude API key in Settings > General first.')
+      if (!aiKey) throw new Error('Add a Claude API key in Settings > Claude first.')
       return mockParse(question)
     },
     async contactsStatus(id) {

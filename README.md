@@ -14,7 +14,7 @@ yarn test       # unit tests (Vitest) for the pure modules in src/shared
 yarn dist:win   # Windows installer into dist/ (run on Windows)
 ```
 
-Open `out/renderer/index.html` through a local server in a plain browser to get a mock mode with fake accounts (`?empty` starts with none, `?ai` acts as if a Claude key were saved).
+Open `out/renderer/index.html` through a local server in a plain browser to get a mock mode with fake accounts (`?empty` starts with none, `?ai` acts as if a Claude key were saved; Summarise and Suggest a reply still start off until switched on in Settings > Claude).
 
 ## Accounts
 
@@ -57,7 +57,7 @@ Existing app-password Google accounts can switch with **Sign in with Google…**
 - Gmail-style compose in the main window: docked cards at the bottom right (minimize, full screen, several at once), recipient chips with To, Cc and Bcc, rich text with a formatting bar (or plain text mode), attachments by button, drag and drop or paste, per-account signatures, templates, emoji picker and spell check suggestions on right-click
 - Drafts save to the account's Drafts folder as you type (and are kept locally in case of a crash), so they show up on your other devices; open one from Drafts to continue it
 - Reply, reply all and forward open inline under the message, with the quote folded behind `···` and a button to pop the reply out into a docked card
-- Undo send (Settings > General), Schedule send from the Send arrow, and an optional "Suggest a reply" with your Claude API key
+- Undo send (Settings > General), Schedule send from the Send arrow, and an optional "Suggest a reply" with your Claude API key (switched on separately in Settings > Claude)
 - SMTP sending with the From account picker; copy saved to Sent where the server doesn't do it
 - Recipient autocomplete in To and Cc from the From account's address book (Google Contacts with Google sign-in, iCloud and Fastmail over CardDAV with the app password) plus people in its Sent mail and Inbox; cached in `%APPDATA%\winmail\contacts.json`, status in Settings > Accounts
 - Mail is saved on this PC (`%APPDATA%\winmail\mail-cache.db`, not encrypted, size and Clear in Settings > General > Storage): folders you have opened and messages you have read show at once at startup and work offline, and a refresh downloads only what is new, removed or flagged instead of the whole list
@@ -69,7 +69,7 @@ Existing app-password Google accounts can switch with **Sign in with Google…**
 - One-click unsubscribe banner for mailing lists; Print and Show Original from the message's ··· menu; Mark All as Read on a folder's right-click menu
 - Windows notifications for new mail while WinMail is in the background; click one to open the message
 - Scheduled list in the sidebar to edit or cancel scheduled mail
-- Optional Claude features with your own API key (Settings > General): Summarise a message, Suggest a reply, AI search (ask for mail in plain language with the sparkle in the search box, or start with `?`)
+- Optional Claude features with your own API key (Settings > Claude): Summarise a message, Suggest a reply, AI search (ask for mail in plain language with the sparkle in the search box, or start with `?`). The key alone sends no mail to Claude: Summarise and Suggest a reply each send the message's sender, subject and text, so each has its own switch under "Send message content to Claude" (off until you turn it on), and their results are marked "Sent to Claude". AI search sends only your question
 - HTML mail sanitised with DOMPurify in a sandboxed iframe; remote images blocked until you allow them
 - Tracker shield: a banner such as "Tracked by Mailchimp · 3 tracked links" on mail that tracks you. Tracking pixels are removed even after you allow remote images; tracked links lose their tracking parameters, redirects that carry their destination are opened directly, and other click links are marked with the host they go through. All local: links are never fetched to see where they go
 - Attachments in received mail: click to save
