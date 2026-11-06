@@ -56,7 +56,7 @@ Plus a **Send test notification** button.
 
 ## Verification notes
 
-- Dev builds show "Electron" as the toast's app name; packaged builds use the AUMID `com.pawel.winmail`.
+- Dev builds show "Electron" as the toast's app name and use the AUMID `com.pawel.winmail.dev`; packaged builds use `com.pawel.winmail`. Keep them separate: the taskbar picks its icon by AUMID, and a Start Menu `Electron.lnk` carrying the packaged ID gave the installed app a blank icon once its target was gone.
 - Driver: scratchpad `drive/cdp.mjs` (DevTools on port 9333) and `drive/screen.ps1` (screen corner capture).
 
 ## Coordination
