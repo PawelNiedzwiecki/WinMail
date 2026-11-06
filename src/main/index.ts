@@ -363,7 +363,11 @@ if (!app.requestSingleInstanceLock()) {
 
   app.whenReady().then(() => {
     // Windows shows notifications only for an app with an AppUserModelID; match the installer's appId.
-    if (process.platform === 'win32') app.setAppUserModelId('com.pawel.winmail')
+    // Dev runs get their own: the taskbar picks its icon by this ID, so a Start Menu shortcut
+    // pointing at the dev Electron could replace the installed app's icon.
+    if (process.platform === 'win32') {
+      app.setAppUserModelId(app.isPackaged ? 'com.pawel.winmail' : 'com.pawel.winmail.dev')
+    }
     let store: Store
     try {
       store = new Store()
