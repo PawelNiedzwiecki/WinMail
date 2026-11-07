@@ -16,7 +16,7 @@ import { blockingProblem, confirmations } from './checks'
 import { maxOpen } from './dockLayout'
 import { insertHtml, insertText } from './editorCommands'
 import { commitTyping, toInput } from './input'
-import { refreshAutoWait, setOwnAddresses } from './waiting'
+import { refreshAutoWait, scheduleAutoWait, setOwnAddresses } from './waiting'
 import { DEFAULT_WAIT_DAYS } from '@shared/waiting'
 import { htmlToPlain } from './outgoing'
 import { forwardBlock, isForwardBlock, replyQuote, replyRecipients, splitDraft, subjectFor } from './quote'
@@ -594,6 +594,8 @@ export async function openFromDrafts(m: MessageSummary): Promise<void> {
     const s = fromInput(await api.openDraft(m.accountId, m.mailbox, m.uid, m.uidValidity), {})
     putSession(s)
     activate(s.id)
+    // A switch the user never set follows the text, once the editor shows it.
+    scheduleAutoWait(s.id)
   } catch (e) {
     toast({ text: errText(e), tone: 'error' })
   }
@@ -604,6 +606,7 @@ export function openInput(input: SendInput, dirty = true): void {
   const s = fromInput(input, { dirty })
   putSession(s)
   activate(s.id)
+  scheduleAutoWait(s.id)
 }
 
 /** Brings back drafts a crash or an offline close left behind, minimized. */

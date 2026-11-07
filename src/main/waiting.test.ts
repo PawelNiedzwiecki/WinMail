@@ -134,6 +134,15 @@ describe('WaitingFor', () => {
     expect(() => t.w.stop('nope')).toThrow()
   })
 
+  it('refuses a malformed item to put back', () => {
+    const t = setup()
+    t.w.sent(input(), '<m1@x>')
+    const item = t.w.stop(t.list()[0]!.id)
+    expect(() => t.w.restore({ ...item, nudgedAt: 5 as unknown as string })).toThrow()
+    expect(() => t.w.restore({ ...item, dueAt: 'soon' })).toThrow()
+    expect(t.list()).toEqual([])
+  })
+
   it('lists nudged messages first', async () => {
     const t = setup()
     t.w.sent(input({ subject: 'later' }), '<m1@x>')

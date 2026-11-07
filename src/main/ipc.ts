@@ -198,8 +198,9 @@ export function registerIpc(
   handle('mail:send', async (input: SendInput) => {
     attachments.check(input)
     const messageId = await mail.send(input)
-    contacts.recordSent(input.accountId, input.to, input.cc, input.bcc)
+    // The message is out: register the wait before anything else can fail.
     waiting.sent(input, messageId)
+    contacts.recordSent(input.accountId, input.to, input.cc, input.bcc)
   })
   handle('mail:saveDraft', (input: SendInput) => {
     attachments.check(input)

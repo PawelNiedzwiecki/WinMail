@@ -423,8 +423,8 @@ if (!app.requestSingleInstanceLock()) {
       () => send('outbox:changed'),
       (e) => send('outbox:event', e),
       (input, messageId) => {
-        contacts.recordSent(input.accountId, input.to, input.cc, input.bcc)
         waiting.sent(input, messageId)
+        contacts.recordSent(input.accountId, input.to, input.cc, input.bcc)
       }
     )
     outbox = queue

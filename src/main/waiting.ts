@@ -31,7 +31,8 @@ function isWaitingInfo(x: unknown): x is WaitingInfo {
     typeof w.subject === 'string' &&
     typeof w.days === 'number' &&
     !Number.isNaN(Date.parse(w.sentAt)) &&
-    !Number.isNaN(Date.parse(w.dueAt))
+    !Number.isNaN(Date.parse(w.dueAt)) &&
+    (w.nudgedAt === undefined || (typeof w.nudgedAt === 'string' && !Number.isNaN(Date.parse(w.nudgedAt))))
   )
 }
 

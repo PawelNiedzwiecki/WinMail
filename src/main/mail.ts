@@ -174,6 +174,8 @@ const WAIT_HEADER = 'X-WinMail-Wait'
 
 /** Most messages fetched when looking for replies to one waited-for message. */
 const MAX_REPLY_ROWS = 50
+/** Message-IDs per OR search when looking for replies, to stay inside servers' limits on search size. */
+const REPLY_SEARCH_BATCH = 20
 
 /**
  * Fetched mail that answers something: what the Waiting for list needs to tell whether a person replied. Only
@@ -1656,14 +1658,17 @@ export class MailService {
     }
     await this.specialPath(accountId, 'inbox')
     const paths = [this.inboxOf(accountId), await this.specialPath(accountId, 'archive'), await this.specialPath(accountId, 'all')]
-    const criteria = ids.flatMap((id): SearchObject[] => [{ header: { 'in-reply-to': id } }, { header: { references: id } }])
     for (const path of new Set(paths.filter((p): p is string => !!p))) {
       await this.withMailbox(accountId, path, async (c) => {
         if (!c.mailbox || !c.mailbox.exists) return
-        const uids = await c.search(criteria.length === 1 ? criteria[0]! : { or: criteria }, { uid: true })
-        if (!Array.isArray(uids)) throw new Error('The server refused the search.')
-        const newest = uids.sort((a, b) => b - a).slice(0, MAX_REPLY_ROWS)
-        if (newest.length) await this.fetchSummaries(c, accountId, path, newest.join(','), true)
+        for (let i = 0; i < ids.length; i += REPLY_SEARCH_BATCH) {
+          const batch = ids.slice(i, i + REPLY_SEARCH_BATCH)
+          const criteria = batch.flatMap((id): SearchObject[] => [{ header: { 'in-reply-to': id } }, { header: { references: id } }])
+          const uids = await c.search({ or: criteria }, { uid: true })
+          if (!Array.isArray(uids)) throw new Error('The server refused the search.')
+          const newest = uids.sort((a, b) => b - a).slice(0, MAX_REPLY_ROWS)
+          if (newest.length) await this.fetchSummaries(c, accountId, path, newest.join(','), true)
+        }
       })
     }
   }
@@ -1845,7 +1850,9 @@ export class MailService {
     }
     const mail = this.mailOptions(acc, input)
     // The Waiting for switch goes with the draft, so reopening it elsewhere in WinMail keeps the user's choice.
-    if (input.waitDays !== undefined) mail.headers = { [WAIT_HEADER]: String(Math.max(0, Math.round(input.waitDays))) }
+    if (input.waitDays !== undefined) {
+      mail.headers = { ...(mail.headers as Record<string, string> | undefined), [WAIT_HEADER]: String(Math.max(0, Math.round(input.waitDays))) }
+    }
     const raw = await compile(mail, true)
     this.statuses.delete(`${acc.id}|${drafts}`)
     const uid = await this.withUpload(acc.id, async (c) => {
@@ -1973,7 +1980,8 @@ export class MailService {
     const refs = p.references ? (Array.isArray(p.references) ? p.references : [p.references]) : []
     const isDraft = path === (await this.specialPath(accountId, 'drafts'))
     if (isDraft) this.cache.rememberDraft(accountId, uid, validity)
-    const wait = Number(p.headers.get(WAIT_HEADER.toLowerCase()))
+    const waitHeader = String(p.headers.get(WAIT_HEADER.toLowerCase()) ?? '').trim()
+    const wait = /^\d{1,3}$/.test(waitHeader) ? Number(waitHeader) : undefined
     return {
       accountId,
       to: formatAddresses(parsedAddresses(p.to)),
@@ -1986,7 +1994,7 @@ export class MailService {
       inReplyTo: p.inReplyTo,
       references: refs,
       draftUid: isDraft ? uid : undefined,
-      waitDays: Number.isFinite(wait) && p.headers.has(WAIT_HEADER.toLowerCase()) ? wait : undefined
+      waitDays: wait
     }
   }
 }

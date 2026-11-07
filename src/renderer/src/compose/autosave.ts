@@ -115,7 +115,7 @@ async function save(id: string): Promise<boolean> {
   flush(id)
   const s = getSession(id)
   if (!s || !s.dirty || s.hidden === 'sending' || s.status === 'unsupported') return true
-  const input = toInput(s)
+  const input = toInput(s, 'draft')
   const h = hash(JSON.stringify({ ...input, draftUid: undefined }))
   const edits = x.edits
   if (h === x.hash && s.draftUid !== undefined) {

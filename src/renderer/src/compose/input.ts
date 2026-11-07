@@ -14,8 +14,11 @@ export function commitTyping(id: string): ComposeSession | undefined {
   return updateSession(id, patch)
 }
 
-/** What the main process sends or saves. The editor must be flushed first. */
-export function toInput(s: ComposeSession): SendInput {
+/**
+ * What the main process sends or saves. The editor must be flushed first. A draft keeps the Waiting for switch only
+ * when the user set it, so a switch that turned on by itself still follows the text when the draft is reopened.
+ */
+export function toInput(s: ComposeSession, purpose: 'send' | 'draft' = 'send'): SendInput {
   const out = s.plain
     ? { html: undefined, text: s.body.trimEnd() + (s.quote ? `\n\n${htmlToPlain(s.quote)}` : '') }
     : toOutgoing(s.body, s.quote)
@@ -31,7 +34,7 @@ export function toInput(s: ComposeSession): SendInput {
     inReplyTo: s.inReplyTo,
     references: s.references,
     draftUid: s.draftUid,
-    // 0 keeps "turned off" with a draft; an untouched switch that is off says nothing.
-    waitDays: s.wait.on ? s.wait.days : s.wait.manual ? 0 : undefined
+    // Sending: the days when on. 0 means the user turned it off; undefined that it was never on or touched.
+    waitDays: purpose === 'draft' && !s.wait.manual ? undefined : s.wait.on ? s.wait.days : s.wait.manual ? 0 : undefined
   }
 }
