@@ -100,6 +100,8 @@ const api: WinMailApi = {
   deliverNow: () => call('delivery:now'),
   listDeliveries: () => call('delivery:list'),
   onDeliveryChanged: (cb) => on('delivery:changed', cb),
+  briefSummary: (id) => call('delivery:briefSummary', id),
+  onShowBrief: (cb) => on('delivery:showBrief', cb),
 
   aiAvailable: () => call('ai:available'),
   setAiKey: (key) => call('ai:setKey', key),

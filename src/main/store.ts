@@ -119,7 +119,9 @@ function withDefaults(s: Partial<Settings> | undefined): Settings {
     contentOptIns: normaliseOptIns(s?.contentOptIns),
     batchDelivery: s?.batchDelivery === true,
     deliveryTimes: normaliseTimes(s?.deliveryTimes),
-    vips: normaliseVips(s?.vips)
+    vips: normaliseVips(s?.vips),
+    brief: s?.brief !== false,
+    morningBriefNotify: s?.morningBriefNotify !== false
   }
 }
 

@@ -14,7 +14,7 @@ yarn test       # unit tests (Vitest) for the pure modules in src/shared
 yarn dist:win   # Windows installer into dist/ (run on Windows)
 ```
 
-Open `out/renderer/index.html` through a local server in a plain browser to get a mock mode with fake accounts (`?empty` starts with none, `?ai` acts as if a Claude key were saved; Summarise and Suggest a reply still start off until switched on in Settings > Claude; `?batch` turns Batched delivery on with three messages held, `?delivery` also makes a Delivery happen four seconds after launch).
+Open `out/renderer/index.html` through a local server in a plain browser to get a mock mode with fake accounts (`?empty` starts with none, `?ai` acts as if a Claude key were saved; Summarise and Suggest a reply still start off until switched on in Settings > Claude; `?batch` turns Batched delivery on with three messages held and a Brief for the last Delivery, `?delivery` also makes a Delivery happen four seconds after launch, `?morning` makes the Brief a Morning brief).
 
 ## Accounts
 
@@ -71,6 +71,7 @@ Existing app-password Google accounts can switch with **Sign in with Google…**
 - Scheduled list in the sidebar to edit or cancel scheduled mail
 - Waiting for: the hourglass in Compose's footer marks a message you expect an answer to. It turns on by itself when you ask people a question (not lists or no-reply addresses), and you can turn it off or pick 1 day to 2 weeks. If nobody replies in time (3 days by default), the message comes back as a nudge: a notification, and a count on **Waiting for** in the sidebar, whose list offers Follow Up, Wait Longer and Done. Out-of-office answers and bounces don't count as replies. All local: nothing moves on the server and nothing goes to Claude
 - Batched delivery (Settings > Delivery, off by default): new Inbox mail waits and arrives together at set times (09:00, 13:00 and 17:00 to start with), with one notification. Mail from VIPs comes through at once; add them in Settings or from a message's menu. Above the Inbox, "Next delivery at 13:00" and **Deliver Now**. Held mail is hidden in WinMail only, so nothing changes on the server and search still finds it
+- The Brief: after each Delivery, a card at the top of the Inbox lists what needs you and why ("asks you a question", "invitation", "replied to you", "VIP"), everyone else by name, and the newsletters and notifications counted. The day's first is the Morning brief, which adds the replies you're still waiting for and a notification ("Morning brief · 12 messages, 3 need you"). Worked out on your PC; a Claude-written paragraph is optional and has its own switch in Settings > Claude
 - Optional Claude features with your own API key (Settings > Claude): Summarise a message, Suggest a reply, AI search (ask for mail in plain language with the sparkle in the search box, or start with `?`). The key alone sends no mail to Claude: Summarise and Suggest a reply each send the message's sender, subject and text, so each has its own switch under "Send message content to Claude" (off until you turn it on), and their results are marked "Sent to Claude". AI search sends only your question
 - HTML mail sanitised with DOMPurify in a sandboxed iframe; remote images blocked until you allow them
 - Tracker shield: a banner such as "Tracked by Mailchimp · 3 tracked links" on mail that tracks you. Tracking pixels are removed even after you allow remote images; tracked links lose their tracking parameters, redirects that carry their destination are opened directly, and other click links are marked with the host they go through. All local: links are never fetched to see where they go
@@ -128,7 +129,7 @@ In a message card or inline reply:
 ```
 src/
   shared/     Types and provider presets used by both processes; trackers.ts is the Tracker shield's rules, waiting.ts the
-              Waiting for rules (both with tests)
+              Waiting for rules, delivery.ts and brief.ts Batched delivery and the Brief (all with tests)
   main/       Electron main process
     store.ts  Accounts, settings, encrypted passwords
     mail.ts   IMAP (imapflow) and SMTP (nodemailer), drafts on a second IMAP connection, incremental folder sync

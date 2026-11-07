@@ -3,6 +3,7 @@ import { useEffect, useId, useState } from 'react'
 import type { Account, Contact, Settings } from '@shared/types'
 import { MAX_DELIVERY_TIMES, formatTime, isVip, normaliseTimes, parseTime } from '@shared/delivery'
 import { isListAddress } from '@shared/waiting'
+import { optedIn } from '@shared/contentFeatures'
 import { api } from '../../api'
 import { Select } from '../Select'
 import { Group, Item, Switch } from './controls'
@@ -201,6 +202,40 @@ export function DeliveryPage({ settings, accounts, onChange }: Props) {
               </div>
             </Item>
           )}
+        </div>
+      </Group>
+
+      <Group title="Brief">
+        <div className={on ? '' : 'st-dim'} aria-disabled={!on}>
+          <Item
+            title="Show a Brief with each delivery"
+            description="A short card at the top of the Inbox: what needs you, with the reason, and everything else grouped. Worked out on this PC."
+          >
+            <Switch label="Show a Brief with each delivery" checked={settings.brief} onChange={(brief) => set({ brief })} />
+          </Item>
+          <div className={settings.brief ? '' : 'st-dim'} aria-disabled={!settings.brief}>
+            <Item
+              title="Morning brief notification"
+              description="Announce the day's first delivery: how many messages came and how many need you. Follows your notification settings, quiet hours included."
+            >
+              <Switch
+                label="Morning brief notification"
+                checked={settings.morningBriefNotify}
+                onChange={(morningBriefNotify) => set({ morningBriefNotify })}
+              />
+            </Item>
+          </div>
+          <Item
+            title="Claude-written summary"
+            description={
+              <>
+                A paragraph from Claude at the top of the Brief. It sends message content, so it has its own switch in{' '}
+                <b>Settings &gt; Claude</b>, off until you turn it on.
+              </>
+            }
+          >
+            <span className="dl-state">{optedIn(settings, 'brief') ? 'On' : 'Off'}</span>
+          </Item>
         </div>
       </Group>
     </>

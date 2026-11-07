@@ -1,21 +1,28 @@
 /**
  * Content opt-ins (ADR 0001): a saved Claude key alone lets no message content leave this PC. Every feature that
  * sends content (subjects, bodies, attachments, addresses) to Claude is declared here, and each one gets:
- * - its own switch in Settings > Claude, with `sends` as the description (off by default),
+ * - its own switch in Settings > Claude, with `sends` and `when` as the description (off by default),
  * - a check in the main process, which refuses the request while the switch is off.
- * To add one (e.g. Brief or Magazine summaries), add an entry below and call `assertOptedIn` before the request.
+ * To add one (e.g. Magazine summaries), add an entry below and call `assertOptedIn` before the request.
  * Features that send only the user's own words (AI search sends the question) need no entry.
  */
 export const CONTENT_FEATURES = {
   summarise: {
     title: 'Summarise',
-    sends: 'Sends the sender, subject and text of the message you summarise.'
+    sends: 'Sends the sender, subject and text of the message you summarise.',
+    when: 'Only when you ask.'
   },
   reply: {
     title: 'Suggest a reply',
-    sends: 'Sends the sender, subject and text of the message you are replying to.'
+    sends: 'Sends the sender, subject and text of the message you are replying to.',
+    when: 'Only when you ask.'
+  },
+  brief: {
+    title: 'Brief',
+    sends: 'Sends the sender, subject and preview of each delivered message, for a short paragraph at the top of the Brief.',
+    when: 'With each Delivery that brings mail, while Batched delivery and the Brief are on.'
   }
-} as const satisfies Record<string, { title: string; sends: string }>
+} as const satisfies Record<string, { title: string; sends: string; when: string }>
 
 export type ContentFeatureId = keyof typeof CONTENT_FEATURES
 
