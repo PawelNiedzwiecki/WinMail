@@ -42,6 +42,7 @@ import type {
 import { getProvider } from '../shared/providers'
 import { categorize } from '../shared/categorize'
 import { isAutomatic } from '../shared/waiting'
+import { isHeld, type Holdable, type HoldRule } from '../shared/delivery'
 import type { FlagRow, FolderState, FolderStatus, MailCache, SnapState } from './cache'
 import type { AccountLabelStore, Snoozed, Store } from './store'
 import {
@@ -154,6 +155,8 @@ const STATUS_FRESH_MS = 10_000
 
 /** More new messages than this in one folder start its saved list again instead of being fetched one by one. */
 const MAX_NEW_MESSAGES = 200
+/** Unread Inbox messages looked at to find held mail: the newest ones, which is where held mail is. */
+const MAX_HELD_SCAN = 500
 
 const CATEGORY_QUERY = /^category:\w+$/
 
@@ -412,6 +415,15 @@ export class MailService {
 
   /** Sees every reply WinMail fetches, from any folder, so Waiting for notices answers without a search. */
   private replyWatch: (rows: ReplyCandidate[]) => void = () => {}
+
+  /** What Batched delivery holds right now; null while it is off. */
+  private holdRule: () => HoldRule | null = () => null
+  /** Held Inbox UIDs per account, remembered while the Inbox and the rule stay the same. */
+  private heldMemo = new Map<string, { key: string; uids: number[] }>()
+
+  holdBy(fn: () => HoldRule | null): void {
+    this.holdRule = fn
+  }
 
   watchReplies(fn: (rows: ReplyCandidate[]) => void): void {
     this.replyWatch = fn
@@ -695,7 +707,96 @@ export class MailService {
     const sorted = out.sort((a, b) => rank(a) - rank(b) || a.path.localeCompare(b.path))
     this.cache.saveMailboxes(accountId, sorted, states)
     this.mailboxLists.set(accountId, sorted)
-    return sorted
+    return this.withoutHeld(accountId, sorted, states)
+  }
+
+  /** The folder list as last saved on this PC, held mail left out of the Inbox count as far as the saved rows tell. */
+  cachedMailboxes(accountId: string): MailboxInfo[] | null {
+    const list = this.cache.mailboxes(accountId)
+    const rule = this.holdRule()
+    if (!list || !rule) return list
+    return list.map((b) => {
+      if (b.specialUse !== 'inbox') return b
+      const held = this.heldFromCache(accountId, b.path, rule).length
+      return { ...b, unseen: Math.max(0, b.unseen - held), held }
+    })
+  }
+
+  /** Batched delivery: unread Inbox mail that is held does not count, and the Inbox says how much is held. */
+  private async withoutHeld(accountId: string, list: MailboxInfo[], states: Map<string, FolderStatus>): Promise<MailboxInfo[]> {
+    const rule = this.holdRule()
+    const inbox = list.find((b) => b.specialUse === 'inbox')
+    if (!rule || !inbox) return list
+    let held: number[] = []
+    if (inbox.unseen > 0) {
+      const st = states.get(inbox.path)
+      try {
+        held = await this.heldUids(accountId, inbox.path, rule, st ? `${st.uidValidity}|${st.uidNext}|${inbox.unseen}` : null)
+      } catch (err) {
+        console.error('[delivery] could not read held mail:', err instanceof Error ? err.message : err)
+        held = this.heldFromCache(accountId, inbox.path, rule).map((m) => m.uid)
+      }
+    }
+    return list.map((b) => (b === inbox ? { ...b, unseen: Math.max(0, b.unseen - held.length), held: held.length } : b))
+  }
+
+  /** Held messages among the Inbox rows saved on this PC. */
+  private heldFromCache(accountId: string, inbox: string, rule: HoldRule): MessageSummary[] {
+    return (this.cache.window(accountId, inbox, 500)?.messages ?? []).filter((m) => isHeld(m, rule))
+  }
+
+  /**
+   * UIDs of the held messages in an account's Inbox: unread ones the server received after the last Delivery, from
+   * neither a VIP nor the user. `status` (UIDVALIDITY, UIDNEXT and the unread count) lets the answer be reused until
+   * the Inbox changes.
+   */
+  private async heldUids(accountId: string, inbox: string, rule: HoldRule, status: string | null): Promise<number[]> {
+    const key = status && `${status}|${rule.deliveredUntil}|${rule.vips.join(',')}|${rule.own.join(',')}`
+    const memo = this.heldMemo.get(accountId)
+    if (key && memo?.key === key) return memo.uids
+    const uids = await this.withMailbox(accountId, inbox, async (c) => {
+      const rows = await this.unreadSince(c, rule.deliveredUntil)
+      return rows.filter((r) => isHeld(r, rule)).map((r) => r.uid)
+    })
+    if (key) this.heldMemo.set(accountId, { key, uids })
+    return uids
+  }
+
+  /**
+   * Unread messages of the selected folder the server received after `after`: SEARCH SINCE works in whole days (in
+   * the server's time zone), so it asks from the day before and the exact time is checked here. Only what holding needs.
+   */
+  private async unreadSince(c: ImapFlow, after: string): Promise<(Holdable & { uid: number })[]> {
+    if (!c.mailbox || !c.mailbox.exists) return []
+    const since = new Date(Date.parse(after) - 24 * 60 * 60_000)
+    const found = await c.search({ seen: false, since }, { uid: true })
+    if (!Array.isArray(found) || !found.length) return []
+    const newest = found.sort((a, b) => b - a).slice(0, MAX_HELD_SCAN)
+    const rows = await c.fetchAll(packUids(newest), { uid: true, flags: true, envelope: true, internalDate: true }, { uid: true })
+    const start = Date.parse(after)
+    return rows
+      .filter((r) => r.internalDate && new Date(r.internalDate).getTime() > start)
+      .map((r) => ({
+        uid: r.uid,
+        seen: r.flags?.has('\\Seen') ?? false,
+        from: toAddresses(r.envelope?.from)[0] ?? { name: '', email: '' },
+        date: new Date(r.envelope?.date ?? r.internalDate!).toISOString(),
+        arrivedAt: new Date(r.internalDate!).toISOString()
+      }))
+  }
+
+  /**
+   * For a Delivery's record: the unread Inbox messages that arrived after `after` and up to `until`, from neither a
+   * VIP nor the user, with previews. Newest first.
+   */
+  async heldBetween(accountId: string, after: string, until: string, rule: HoldRule): Promise<MessageSummary[]> {
+    const inbox = (await this.specialPath(accountId, 'inbox')) ?? 'INBOX'
+    const end = Date.parse(until)
+    return this.withMailbox(accountId, inbox, async (c) => {
+      const rows = await this.unreadSince(c, after)
+      const uids = rows.filter((r) => Date.parse(r.arrivedAt!) <= end && isHeld(r, { ...rule, deliveredUntil: after })).map((r) => r.uid)
+      return uids.length ? this.fetchSummaries(c, accountId, inbox, packUids(uids), true) : []
+    })
   }
 
   private async specialPath(accountId: string, use: SpecialUse): Promise<string | undefined> {
@@ -1099,6 +1200,7 @@ export class MailService {
           subject,
           preview: this.previews.get(cacheKey(r.uid)) ?? '',
           date: new Date(date).toISOString(),
+          arrivedAt: r.internalDate ? new Date(r.internalDate).toISOString() : undefined,
           seen: r.flags?.has('\\Seen') ?? false,
           flagged: r.flags?.has('\\Flagged') ?? false,
           hasAttachments: hasAttachments(r.bodyStructure),
@@ -1175,6 +1277,7 @@ export class MailService {
         subject: p.subject || '(No Subject)',
         preview: makePreview(text),
         date: (p.date ?? new Date(m.internalDate ?? Date.now())).toISOString(),
+        arrivedAt: m.internalDate ? new Date(m.internalDate).toISOString() : undefined,
         seen: true,
         flagged: m.flags?.has('\\Flagged') ?? false,
         hasAttachments: hasAttachments(m.bodyStructure),
@@ -1351,10 +1454,23 @@ export class MailService {
   }
 
   async markAllRead(accountId: string, path: string): Promise<void> {
+    const rule = path === this.inboxOf(accountId) ? this.holdRule() : null
     await this.withMailbox(accountId, path, async (c) => {
       if (!c.mailbox || !c.mailbox.exists) return
       // False can also mean nothing was unread; either way the next sync reads the flags again.
       this.statuses.delete(`${accountId}|${path}`)
+      // Batched delivery: mail still held has not been shown, so it is not marked read unseen.
+      const held = rule ? (await this.unreadSince(c, rule.deliveredUntil)).filter((r) => isHeld(r, rule)).map((r) => r.uid) : []
+      if (held.length) {
+        const unread = await c.search({ seen: false }, { uid: true })
+        if (!Array.isArray(unread)) throw new Error('The server could not list unread messages. Try again.')
+        const keep = new Set(held)
+        const shown = unread.filter((u) => !keep.has(u))
+        if (!shown.length) return
+        if (await c.messageFlagsAdd(packUids(shown), ['\\Seen'], { uid: true })) this.cache.setFlags(accountId, path, shown, { seen: true })
+        else this.cache.clearCheckpoint(accountId, path)
+        return
+      }
       if (await c.messageFlagsAdd({ seen: false }, ['\\Seen'])) this.cache.markAllRead(accountId, path)
       else this.cache.clearCheckpoint(accountId, path)
     })

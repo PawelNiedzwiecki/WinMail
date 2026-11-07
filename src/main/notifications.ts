@@ -3,6 +3,7 @@ import { createHash } from 'crypto'
 import type {
   Account,
   Address,
+  DeliveryRecord,
   MailChangedEvent,
   MessageSummary,
   OpenMessageEvent,
@@ -41,6 +42,8 @@ interface Deps {
   showWaiting: (e: WaitingOpenEvent) => void
   /** Stops waiting for a reply to one message (the nudge's Done button). */
   stopWaiting: (id: string) => void
+  /** Batched delivery holds this Inbox message until the next Delivery: no notification now. */
+  held: (m: MessageSummary) => boolean
 }
 
 const SAMPLE: Omit<MessageSummary, 'accountId' | 'key'> = {
@@ -116,7 +119,7 @@ export class Notifier {
     if (BrowserWindow.getAllWindows().some((w) => w.isFocused()) || !Notification.isSupported()) return
     const account = this.d.store.listAccounts().find((a) => a.id === accountId)
     if (!account) return
-    const wanted = list.filter((m) => this.wanted(s, m))
+    const wanted = list.filter((m) => !this.d.held(m) && this.wanted(s, m))
     if (!wanted.length) return
     if (wanted.length > MAX_SINGLE) this.summary(account, wanted, s)
     else for (const m of wanted) await this.single(account, m, s, false)
@@ -169,6 +172,34 @@ export class Notifier {
     })
     n.on('click', () => this.d.showWaiting({ id: w.id }))
     n.on('action', (e) => (e.actionIndex === 0 ? this.d.showWaiting({ id: w.id, followUp: true }) : this.d.stopWaiting(w.id)))
+    this.show(n)
+  }
+
+  /**
+   * A Delivery time showed held mail: one notification for all of it, whatever the accounts, and only while WinMail is
+   * in the background. The usual settings apply: which mail notifies, muted accounts, quiet hours, preview and sound.
+   */
+  delivered(record: DeliveryRecord): void {
+    const s = this.d.store.getSettings()
+    if (!s.notifyNewMail || inQuietHours(s) || !Notification.isSupported()) return
+    if (BrowserWindow.getAllWindows().some((w) => w.isFocused())) return
+    const list = record.items
+      .map((i): MessageSummary => ({ ...i, key: `${i.accountId}|${i.mailbox}|${i.uid}`, date: i.arrivedAt, seen: false }))
+      .filter((m) => !s.notifyMutedAccounts.includes(m.accountId) && this.wanted(s, m))
+    if (!list.length) return
+    const newest = list[0]!
+    const n = new Notification({
+      id: tag(`delivery|${record.id}`),
+      title: list.length === 1 ? 'New message' : `${list.length} new messages`,
+      body:
+        s.notifyPreview === 'none'
+          ? 'Delivered just now'
+          : list.length === 1 && s.notifyPreview === 'full'
+            ? `${newest.from.name || newest.from.email}\n${newest.subject || '(No Subject)'}`
+            : `From ${senders(list)}`,
+      silent: !s.notifySound
+    })
+    n.on('click', () => this.d.open({ accountId: newest.accountId, path: newest.mailbox, uid: newest.uid }))
     this.show(n)
   }
 
