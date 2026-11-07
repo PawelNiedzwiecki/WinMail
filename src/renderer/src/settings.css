@@ -281,6 +281,10 @@
 }
 
 /* ---------- Delivery ---------- */
+.dl-state {
+  color: var(--text-2);
+  font-size: 12px;
+}
 .dl-time {
   display: flex;
   align-items: center;

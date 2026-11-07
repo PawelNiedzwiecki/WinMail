@@ -1,6 +1,7 @@
 // Browser-only stand-in for the Electron bridge, used for UI development.
 import { assertOptedIn } from '@shared/contentFeatures'
 import { nudgeTime } from '@shared/waiting'
+import { makeBrief } from '@shared/brief'
 import { advance, formatTime, isHeld, nextDeliveryAt, sameDay, vipAddresses, type HoldRule } from '@shared/delivery'
 import {
   DEFAULT_SETTINGS,
@@ -324,6 +325,13 @@ export function createMockApi(): WinMailApi {
   const inboxOf = (id: string) => boxes[id]?.find((b) => b.specialUse === 'inbox')?.path
   const heldIn = (id: string, rule = holdRule()) =>
     rule ? messages.filter((m) => m.accountId === id && m.mailbox === inboxOf(id) && isHeld(m, rule)) : []
+  /** A delivered message as MailService lists it for the record, with what the Brief reads. */
+  const toItem = (m: MessageDetail) => ({
+    ...summary(m),
+    arrivedAt: m.arrivedAt ?? m.date,
+    ...(m.invite ? { hasInvite: true } : {}),
+    ...(m.unsubscribe ? { bulk: true } : {})
+  })
   const deliver = (kind: DeliveryKind, at: Date) => {
     const items = accounts.flatMap((a) => heldIn(a.id)).sort((a, b) => b.date.localeCompare(a.date))
     deliveredUntil = at.toISOString()
@@ -334,7 +342,7 @@ export function createMockApi(): WinMailApi {
         at: at.toISOString(),
         kind,
         first: !newest || !sameDay(new Date(newest.at), at),
-        items: items.map((m) => ({ ...summary(m), arrivedAt: m.arrivedAt ?? m.date })),
+        items: items.map(toItem),
         more: 0
       },
       ...deliveryRecords
@@ -360,14 +368,33 @@ export function createMockApi(): WinMailApi {
       deliveryTimes: [formatTime(mins(new Date(now.getTime() - 5 * 60_000))), formatTime(mins(new Date(now.getTime() + 3 * 3600_000)))].sort()
     }
     deliveredUntil = ago(4)
+    const quoteId = waiting.find((w) => w.id === 'w-quote')?.messageId
     messages.push(
       msg('gmail', 'INBOX', ['Priya Shah', 'priya.shah@example.com'], 'Re: Quote for the kitchen',
-        'Hi Alex,\n\nHere is the updated quote. Can you confirm the worktop colour by Monday?\n\nPriya', 3, { parents: [] }),
+        'Hi Alex,\n\nHere is the updated quote. Can you confirm the worktop colour by Monday?\n\nPriya', 3,
+        { parents: quoteId ? [quoteId] : [] }),
       msg('icloud', 'INBOX', ['Lena Novak', 'lena.novak@example.com'], 'Dinner next week?',
         'Are you free on Thursday? The new place on Upper Street has a table at 7.', 2),
       msg('gmail', 'INBOX', ['Fabrikam Store', 'news@fabrikam.example'], 'Autumn sale starts today',
         'Up to 40% off everything in store and online.', 1)
     )
+    // The Delivery a few minutes ago, so the Brief shows: the Inbox mail of the last half day. `?morning` makes it the
+    // day's first (the Morning brief, after yesterday's 17:00); with `?delivery` the new Delivery is the first instead.
+    const morning = params.has('morning')
+    const lastAt = new Date(now.getTime() - 5 * 60_000)
+    lastAt.setSeconds(0, 0)
+    const yesterday = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1, 17)
+    const earlier: DeliveryRecord = {
+      id: 'mock-earlier', at: morning ? yesterday.toISOString() : ago(3 * 60), kind: 'scheduled', first: !morning,
+      items: [], more: 0
+    }
+    const recent = messages
+      .filter((m) => m.mailbox === 'INBOX' && Date.parse(m.date) < lastAt.getTime() && Date.now() - Date.parse(m.date) < 12 * 3600_000)
+      .sort((a, b) => b.date.localeCompare(a.date))
+    deliveryRecords =
+      morning && params.has('delivery')
+        ? [earlier]
+        : [{ id: 'mock-last', at: lastAt.toISOString(), kind: 'scheduled', first: morning, items: recent.map(toItem), more: 0 }, earlier]
     if (params.has('delivery')) window.setTimeout(() => deliver('scheduled', new Date()), 4000)
   }
   window.setInterval(() => {
@@ -825,6 +852,21 @@ export function createMockApi(): WinMailApi {
     onDeliveryChanged(cb) {
       deliveryListeners.add(cb)
       return () => deliveryListeners.delete(cb)
+    },
+    async briefSummary(id) {
+      await sleep(1200)
+      // Like briefParagraph in main: refused while the Brief Content opt-in is off.
+      assertOptedIn(settings, 'brief')
+      if (!aiKey) throw new Error('Add a Claude API key in Settings > Claude first.')
+      const r = deliveryRecords.find((x) => x.id === id)
+      if (!r) throw new Error('That delivery is no longer kept.')
+      const b = makeBrief(r, { own: accounts.map((a) => a.email), vips: settings.vips, waitingIds: waiting.map((w) => w.messageId) })
+      const names = [...new Set(b.needs.map((n) => (n.item.from.name || n.item.from.email).split(' ')[0]))]
+      return `${names.slice(0, 2).join(' and ') || 'Nobody'} wrote to you directly and may need an answer today. ` +
+        `The other ${r.items.length - b.needs.length} messages are updates and newsletters that can wait.`
+    },
+    onShowBrief() {
+      return () => {}
     },
     async aiAvailable() {
       return !!aiKey

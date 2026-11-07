@@ -400,6 +400,14 @@ if (!app.requestSingleInstanceLock()) {
       w.focus()
       w.webContents.send('waiting:open', e)
     }
+    const showBrief = () => {
+      const w = mainWindow()
+      if (!w) return
+      if (w.isMinimized()) w.restore()
+      w.show()
+      w.focus()
+      w.webContents.send('delivery:showBrief')
+    }
     // The notifier needs the outbox, which needs the mail service; it is set just below.
     let notifier: Notifier | null = null
     const announce = (accountId: string, list: MessageSummary[]) => void notifier?.announce(accountId, list)
@@ -454,7 +462,8 @@ if (!app.requestSingleInstanceLock()) {
         }
       },
       // Announced mail is all Inbox mail.
-      held: (m) => isHeld(m, deliveries.rule())
+      held: (m) => isHeld(m, deliveries.rule()),
+      showBrief
     })
     setMenu()
     registerIpc(store, mailService, contacts, queue, mailCache, waiting, deliveries)

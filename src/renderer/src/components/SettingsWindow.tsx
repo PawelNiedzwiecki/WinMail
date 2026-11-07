@@ -447,7 +447,7 @@ function AiPage({ settings, onChange }: PageProps) {
           <Item
             key={id}
             title={CONTENT_FEATURES[id].title}
-            description={`${CONTENT_FEATURES[id].sends} Only when you ask${saved === false ? '; needs an API key above' : ''}.`}
+            description={`${CONTENT_FEATURES[id].sends} ${CONTENT_FEATURES[id].when}${saved === false ? ' Needs an API key above.' : ''}`}
           >
             <Switch
               label={`Let ${CONTENT_FEATURES[id].title} send message content to Claude`}

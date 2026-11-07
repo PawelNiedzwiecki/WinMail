@@ -21,7 +21,7 @@ import type { Contacts } from './contacts'
 import type { Outbox } from './outbox'
 import type { WaitingFor } from './waiting'
 import type { Deliveries } from './delivery'
-import { askSearch, runAi } from './ai'
+import { askSearch, briefParagraph, runAi } from './ai'
 import { AttachmentGrants, TEMP_ROOT, saveTempFile } from './attachments'
 
 type Handler = (...args: never[]) => unknown
@@ -237,10 +237,19 @@ export function registerIpc(
   handle('delivery:state', () => deliveries.state())
   handle('delivery:now', () => deliveries.deliverNow())
   handle('delivery:list', () => deliveries.records())
+  handle('delivery:briefSummary', (id: string) => {
+    const record = deliveries.records().find((r) => r.id === id)
+    if (!record) throw new Error('That delivery is no longer kept.')
+    return briefParagraph(store, record)
+  })
 
   handle('ai:available', () => store.hasAiKey())
   handle('ai:setKey', (key: string | null) => store.setAiKey(key?.trim() || null))
-  handle('ai:run', (input: AiInput) => runAi(store, input))
+  // The Brief's paragraph goes through `delivery:briefSummary`, which builds what is sent from the saved record.
+  handle('ai:run', (input: AiInput) => {
+    if (input?.task === 'brief') throw new Error('Use briefSummary for the Brief.')
+    return runAi(store, input)
+  })
   handle('ai:search', (question: string) => askSearch(store, question))
 
   handle('contacts:list', (id: string) => contacts.list(id))

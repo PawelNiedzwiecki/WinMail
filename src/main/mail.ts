@@ -231,6 +231,25 @@ function hasAttachments(root: MessageStructureObject | undefined): boolean {
   return found
 }
 
+/** A calendar invitation in the message: a text/calendar part, or an attached .ics file. */
+function hasInvite(root: MessageStructureObject | undefined): boolean {
+  let found = false
+  if (root) {
+    walk(root, (n) => {
+      const name = n.dispositionParameters?.filename ?? n.parameters?.name ?? ''
+      found ||= /^(text\/calendar|application\/ics)$/i.test(n.type) || /\.ics$/i.test(name)
+    })
+  }
+  return found
+}
+
+/** What the Brief reads from a delivered message besides its summary. */
+interface BriefFacts {
+  hasInvite: boolean
+  bulk: boolean
+  automatic: boolean
+}
+
 function toAddresses(list: { name?: string; address?: string }[] | undefined): Address[] {
   return (list ?? []).map((a) => ({ name: a.name || a.address || '', email: a.address ?? '' }))
 }
@@ -799,7 +818,10 @@ export class MailService {
     return this.withMailbox(accountId, inbox, async (c) => {
       const rows = await this.unreadSince(c, after)
       const uids = rows.filter((r) => Date.parse(r.arrivedAt!) <= end && isHeld(r, { ...rule, deliveredUntil: after })).map((r) => r.uid)
-      return uids.length ? this.fetchSummaries(c, accountId, inbox, packUids(uids), true) : []
+      if (!uids.length) return []
+      const facts = new Map<number, BriefFacts>()
+      const list = await this.fetchSummaries(c, accountId, inbox, packUids(uids), true, facts)
+      return list.map((m) => ({ ...m, ...facts.get(m.uid) }))
     })
   }
 
@@ -1113,7 +1135,9 @@ export class MailService {
     accountId: string,
     path: string,
     range: string,
-    byUid: boolean
+    byUid: boolean,
+    /** Filled with what the Brief reads from each message's headers and structure, by UID. */
+    facts?: Map<number, BriefFacts>
   ): Promise<MessageSummary[]> {
     const mb = c.mailbox
     if (!mb) return []
@@ -1185,6 +1209,11 @@ export class MailService {
         const subject = env?.subject || '(No Subject)'
         const parents = [...new Set([...refs, ...messageIds(env?.inReplyTo)])]
         const autoSubmitted = /^auto-submitted:\s*(?!no\b)\S/im.test(hdr) || /^x-auto(reply|respond):/im.test(hdr)
+        facts?.set(r.uid, {
+          hasInvite: hasInvite(r.bodyStructure),
+          bulk: /^(list-id|list-unsubscribe):/im.test(hdr) || /^precedence:\s*(bulk|list|junk)/im.test(hdr),
+          automatic: autoSubmitted
+        })
         if (parents.length) {
           replies.push({
             accountId,

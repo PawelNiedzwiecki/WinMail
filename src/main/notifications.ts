@@ -12,6 +12,7 @@ import type {
   WaitingOpenEvent
 } from '../shared/types'
 import { inQuietHours } from '../shared/quietHours'
+import { makeBrief, morningNotice } from '../shared/brief'
 import { replySubject } from '../shared/subject'
 import type { Contacts } from './contacts'
 import type { MailService } from './mail'
@@ -44,6 +45,8 @@ interface Deps {
   stopWaiting: (id: string) => void
   /** Batched delivery holds this Inbox message until the next Delivery: no notification now. */
   held: (m: MessageSummary) => boolean
+  /** Shows All Inboxes with the Brief at the top (the Morning brief notification). */
+  showBrief: () => void
 }
 
 const SAMPLE: Omit<MessageSummary, 'accountId' | 'key'> = {
@@ -178,6 +181,8 @@ export class Notifier {
   /**
    * A Delivery time showed held mail: one notification for all of it, whatever the accounts, and only while WinMail is
    * in the background. The usual settings apply: which mail notifies, muted accounts, quiet hours, preview and sound.
+   * The day's first Delivery is announced as the Morning brief ("12 messages, 3 need you") while the Brief and its
+   * notification are on; it gives counts only, so it reads the same whatever the preview setting.
    */
   delivered(record: DeliveryRecord): void {
     const s = this.d.store.getSettings()
@@ -188,6 +193,22 @@ export class Notifier {
       .filter((m) => !s.notifyMutedAccounts.includes(m.accountId) && this.wanted(s, m))
     if (!list.length) return
     const newest = list[0]!
+    if (record.first && s.batchDelivery && s.brief && s.morningBriefNotify) {
+      const brief = makeBrief(
+        record,
+        {
+          own: this.d.store.listAccounts().map((a) => a.email),
+          vips: s.vips,
+          waitingIds: this.d.store.listWaiting().map((w) => w.messageId)
+        },
+        { records: this.d.store.getDelivery().records, waiting: this.d.store.listWaiting() }
+      )
+      const notice = morningNotice(brief)
+      const n = new Notification({ id: tag(`delivery|${record.id}`), ...notice, silent: !s.notifySound })
+      n.on('click', () => this.d.showBrief())
+      this.show(n)
+      return
+    }
     const n = new Notification({
       id: tag(`delivery|${record.id}`),
       title: list.length === 1 ? 'New message' : `${list.length} new messages`,
