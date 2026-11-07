@@ -45,7 +45,8 @@ function toItem(m: MessageSummary): DeliveredItem {
 export class Deliveries {
   /** When the timer last ran; a Delivery time passed since then, and only just, is on time. */
   private lastTick: number | null = null
-  private busy = false
+  /** The Delivery being made, while its search runs. */
+  private running: Promise<void> | null = null
 
   constructor(
     private store: Store,
@@ -119,7 +120,7 @@ export class Deliveries {
     const previous = this.lastTick
     this.lastTick = now.getTime()
     const s = this.settings
-    if (!s.batchDelivery || this.busy) return
+    if (!s.batchDelivery || this.running) return
     const saved = this.saved().deliveredUntil
     if (!saved) {
       this.store.setDelivery({ ...this.saved(), deliveredUntil: now.toISOString() })
@@ -131,11 +132,16 @@ export class Deliveries {
     await this.deliver(saved, deliveredUntil, onTime ? 'scheduled' : 'catch-up', crossed)
   }
 
-  /** Shows everything held now. */
+  /**
+   * Shows everything held now. A Delivery already under way finishes first, so this one lists only what is left. It
+   * starts from the saved point, not the last Delivery time, so mail from a Delivery time the timer has not reached
+   * yet is in this record rather than in none.
+   */
   async deliverNow(now = new Date()): Promise<DeliveryState> {
-    const from = this.until(now)
-    if (!from) throw new Error('Batched delivery is off.')
-    if (!this.busy) await this.deliver(from, now.toISOString(), 'now', now)
+    if (this.running) await this.running
+    if (!this.until(now)) throw new Error('Batched delivery is off.')
+    const from = this.saved().deliveredUntil ?? now.toISOString()
+    await this.deliver(from, now.toISOString(), 'now', now)
     return this.state(now)
   }
 
@@ -143,39 +149,42 @@ export class Deliveries {
    * Moves the point to `to` (the windows show the mail at once), then lists what came between `from` and `to` for
    * the record. An account that can't be searched is left out of the record; its mail shows all the same.
    */
-  private async deliver(from: string, to: string, kind: DeliveryKind, at: Date): Promise<void> {
-    this.busy = true
-    try {
-      this.store.setDelivery({ ...this.saved(), deliveredUntil: to })
-      this.changed()
-      const rule = this.rule(at)
-      const found: MessageSummary[] = []
-      if (rule) {
-        for (const a of this.store.listAccounts().filter((x) => x.enabled)) {
-          try {
-            found.push(...(await this.mail.heldBetween(a.id, from, to, rule)))
-          } catch (err) {
-            console.error('[delivery] could not list delivered mail:', err instanceof Error ? err.message : err)
-          }
+  private deliver(from: string, to: string, kind: DeliveryKind, at: Date): Promise<void> {
+    const run = this.make(from, to, kind, at).finally(() => {
+      if (this.running === run) this.running = null
+    })
+    this.running = run
+    return run
+  }
+
+  private async make(from: string, to: string, kind: DeliveryKind, at: Date): Promise<void> {
+    this.store.setDelivery({ ...this.saved(), deliveredUntil: to })
+    this.changed()
+    const rule = this.rule(at)
+    const found: MessageSummary[] = []
+    if (rule) {
+      for (const a of this.store.listAccounts().filter((x) => x.enabled)) {
+        try {
+          found.push(...(await this.mail.heldBetween(a.id, from, to, rule)))
+        } catch (err) {
+          console.error('[delivery] could not list delivered mail:', err instanceof Error ? err.message : err)
         }
       }
-      found.sort((a, b) => (b.arrivedAt ?? b.date).localeCompare(a.arrivedAt ?? a.date))
-      const records = this.saved().records
-      const newest = records[0]
-      const record: DeliveryRecord = {
-        id: randomUUID(),
-        at: at.toISOString(),
-        kind,
-        first: !newest || !sameDay(new Date(newest.at), at),
-        items: found.slice(0, MAX_ITEMS).map(toItem),
-        more: Math.max(0, found.length - MAX_ITEMS)
-      }
-      // Batching may have been turned off while the search ran; the record still says what was shown.
-      this.store.setDelivery({ ...this.saved(), records: [record, ...records].slice(0, KEEP_RECORDS) })
-      this.changed()
-      if (kind === 'scheduled' && record.items.length) this.announce(record)
-    } finally {
-      this.busy = false
     }
+    found.sort((a, b) => (b.arrivedAt ?? b.date).localeCompare(a.arrivedAt ?? a.date))
+    const records = this.saved().records
+    const newest = records[0]
+    const record: DeliveryRecord = {
+      id: randomUUID(),
+      at: at.toISOString(),
+      kind,
+      first: !newest || !sameDay(new Date(newest.at), at),
+      items: found.slice(0, MAX_ITEMS).map(toItem),
+      more: Math.max(0, found.length - MAX_ITEMS)
+    }
+    // Batching may have been turned off while the search ran; the record still says what was shown.
+    this.store.setDelivery({ ...this.saved(), records: [record, ...records].slice(0, KEEP_RECORDS) })
+    this.changed()
+    if (kind === 'scheduled' && record.items.length) this.announce(record)
   }
 }

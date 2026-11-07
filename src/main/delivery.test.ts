@@ -118,6 +118,34 @@ describe('Deliveries', () => {
     expect(t.delivery().records[0]!.kind).toBe('scheduled')
   })
 
+  it('Deliver Now during a running Delivery waits for it, then delivers what is left', async () => {
+    let release: () => void = () => {}
+    const gate = new Promise<void>((r) => (release = r))
+    const t = setup({ deliveredUntil: local(7, 9).toISOString(), held: [message(1, local(7, 12)), message(2, local(7, 13, 2))] })
+    const first = t.heldBetween.getMockImplementation()!
+    t.heldBetween.mockImplementationOnce(async (...args) => {
+      await gate
+      return first(...args)
+    })
+    await t.d.tick(local(7, 12, 59, 50))
+    const scheduled = t.d.tick(local(7, 13, 0, 10))
+    const now = t.d.deliverNow(local(7, 13, 5))
+    release()
+    await scheduled
+    const state = await now
+    expect(state.deliveredUntil).toBe(local(7, 13, 5).toISOString())
+    expect(t.delivery().records.map((r) => [r.kind, r.items.map((i) => i.uid)])).toEqual([
+      ['now', [2]],
+      ['scheduled', [1]]
+    ])
+  })
+
+  it('Deliver Now before the timer has seen a Delivery time lists that mail too', async () => {
+    const t = setup({ deliveredUntil: local(7, 9).toISOString(), held: [message(1, local(7, 12)), message(2, local(7, 13, 2))] })
+    await t.d.deliverNow(local(7, 13, 5))
+    expect(t.delivery().records.map((r) => r.items.map((i) => i.uid))).toEqual([[2, 1]])
+  })
+
   it('refuses Deliver Now while batching is off', async () => {
     const t = setup({ on: false })
     await expect(t.d.deliverNow()).rejects.toThrow(/off/)
