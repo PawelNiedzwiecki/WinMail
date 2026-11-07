@@ -3,6 +3,7 @@ import {
   Check,
   ChevronDown,
   EllipsisVertical,
+  Hourglass,
   Link2,
   Paperclip,
   PenLine,
@@ -13,6 +14,7 @@ import {
 import { useEffect, useRef, useState } from 'react'
 import type { Settings } from '@shared/types'
 import { optedIn, optInOffMessage } from '@shared/contentFeatures'
+import { daysLabel, WAIT_DAY_CHOICES } from '@shared/waiting'
 import { api } from '../../api'
 import {
   deleteTemplate,
@@ -27,6 +29,7 @@ import {
 } from '../../compose/actions'
 import { formatWhen, schedulePresets } from '../../compose/schedule'
 import { updateSession, type ComposeSession } from '../../compose/sessions'
+import { setWait } from '../../compose/waiting'
 import { ContextMenu, type MenuItem } from '../ContextMenu'
 
 interface Props {
@@ -49,7 +52,14 @@ const STATUS: Record<ComposeSession['status'], string> = {
   unsupported: 'Drafts unavailable'
 }
 
-type Menu = { kind: 'send' | 'more' | 'templates'; x: number; y: number }
+type Menu = { kind: 'send' | 'more' | 'templates' | 'wait'; x: number; y: number }
+
+/** Tooltip of the Waiting for switch: what it will do, and why it turned on by itself. */
+function waitTitle(w: ComposeSession['wait']): string {
+  if (!w.on) return 'Wait for a reply'
+  const why = w.manual ? '' : w.reason === 'followUp' ? ' (a follow-up)' : w.reason === 'question' ? ' (you asked something)' : ''
+  return `Waiting for a reply${why}: nudge me in ${daysLabel(w.days)} if nobody answers`
+}
 
 /** Send (with Schedule send), formatting, attach, link, emoji, signature, More, save status and discard. */
 export function ComposeFooter(p: Props) {
@@ -59,6 +69,7 @@ export function ComposeFooter(p: Props) {
   const replyOn = optedIn(p.settings, 'reply')
   const sendRef = useRef<HTMLDivElement>(null)
   const moreRef = useRef<HTMLButtonElement>(null)
+  const waitRef = useRef<HTMLButtonElement>(null)
 
   // Closes the menu if the card goes away under it.
   useEffect(() => () => setMenu(null), [s.id])
@@ -77,6 +88,23 @@ export function ComposeFooter(p: Props) {
           onSelect: () => void schedule(s.id, pr.at)
         })),
         { label: 'Pick date & time…', onSelect: p.onSchedulePick }
+      ]
+    }
+    if (menu?.kind === 'wait') {
+      const w = s.wait
+      return [
+        {
+          label: 'Waiting for a reply',
+          icon: w.on ? <Check size={14} /> : undefined,
+          onSelect: () => setWait(s.id, { on: !w.on })
+        },
+        'separator' as const,
+        { label: 'Nudge me if nobody answers in', disabled: true, onSelect: () => {} },
+        ...WAIT_DAY_CHOICES.map((d) => ({
+          label: daysLabel(d),
+          icon: w.on && w.days === d ? <Check size={14} /> : undefined,
+          onSelect: () => setWait(s.id, { days: d })
+        }))
       ]
     }
     if (menu?.kind === 'templates') {
@@ -147,6 +175,19 @@ export function ComposeFooter(p: Props) {
           () => p.hasSignature && toggleSignature(s.id),
           `ft-optional${p.hasSignature ? '' : ' is-disabled'}`
         )}
+      <button
+        ref={waitRef}
+        className={`ft-btn ft-wait${s.wait.on ? ' is-on' : ''}`}
+        title={waitTitle(s.wait)}
+        aria-label={s.wait.on ? `Waiting for a reply, ${daysLabel(s.wait.days)}` : 'Wait for a reply'}
+        aria-pressed={s.wait.on}
+        aria-haspopup="menu"
+        onMouseDown={noFocus}
+        onClick={() => openAt('wait', waitRef.current)}
+      >
+        <Hourglass size={16} />
+        {s.wait.on && <span className="ft-wait-days">{s.wait.days % 7 === 0 ? `${s.wait.days / 7}w` : `${s.wait.days}d`}</span>}
+      </button>
       {s.reply && p.aiAvailable && (
         <button
           className={`ft-btn ft-optional${replyOn ? '' : ' is-disabled'}`}

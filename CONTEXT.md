@@ -44,6 +44,14 @@ _Avoid_: Digest, Brief
 A sent message the user expects a reply to, which comes back as a nudge if nobody answers in time.
 _Avoid_: Follow-up, reminder, snooze (Snooze brings back received mail)
 
+**Nudge**:
+A Waiting for message coming back because nobody answered in time: a notification and a place at the top of the Waiting for list.
+_Avoid_: Reminder, alert
+
+**Follow-up**:
+A message the user sends in the conversation after a Nudge. It ends the earlier wait and usually waits again.
+_Avoid_: Reminder, chaser
+
 ### Privacy
 
 **Tracker**:

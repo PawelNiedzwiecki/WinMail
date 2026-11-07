@@ -10,7 +10,8 @@ import type {
   MailQuery,
   MoveTarget,
   SendInput,
-  Settings
+  Settings,
+  WaitingInfo
 } from '../shared/types'
 import type { MailService } from './mail'
 import type { Store } from './store'
@@ -18,6 +19,7 @@ import type { MailCache } from './cache'
 import { cancelSignIn, revoke } from './google'
 import type { Contacts } from './contacts'
 import type { Outbox } from './outbox'
+import type { WaitingFor } from './waiting'
 import { askSearch, runAi } from './ai'
 import { AttachmentGrants, TEMP_ROOT, saveTempFile } from './attachments'
 
@@ -58,7 +60,14 @@ async function printHtml(html: string): Promise<void> {
   }
 }
 
-export function registerIpc(store: Store, mail: MailService, contacts: Contacts, outbox: Outbox, cache: MailCache): void {
+export function registerIpc(
+  store: Store,
+  mail: MailService,
+  contacts: Contacts,
+  outbox: Outbox,
+  cache: MailCache,
+  waiting: WaitingFor
+): void {
   const attachments = new AttachmentGrants([store.outboxDir, TEMP_ROOT])
 
   handle('accounts:list', () => store.listAccounts())
@@ -188,8 +197,9 @@ export function registerIpc(store: Store, mail: MailService, contacts: Contacts,
   handle('compose:saveImage', (name: string, bytes: Uint8Array) => saveTempFile(name, bytes))
   handle('mail:send', async (input: SendInput) => {
     attachments.check(input)
-    await mail.send(input)
+    const messageId = await mail.send(input)
     contacts.recordSent(input.accountId, input.to, input.cc, input.bcc)
+    waiting.sent(input, messageId)
   })
   handle('mail:saveDraft', (input: SendInput) => {
     attachments.check(input)
@@ -209,6 +219,15 @@ export function registerIpc(store: Store, mail: MailService, contacts: Contacts,
   handle('outbox:list', () => outbox.list())
   handle('outbox:cancel', (id: string) => outbox.cancel(id))
   ipcMain.on('app:emoji', () => app.showEmojiPanel())
+
+  handle('waiting:list', () => waiting.list())
+  handle('waiting:stop', (id: string) => waiting.stop(id))
+  handle('waiting:restore', (item: WaitingInfo) => waiting.restore(item))
+  handle('waiting:longer', (id: string, days: number) => {
+    if (typeof days !== 'number' || !Number.isFinite(days)) throw new Error('Choose how long to wait.')
+    return waiting.longer(id, days)
+  })
+  handle('waiting:message', (id: string) => waiting.message(id))
 
   handle('ai:available', () => store.hasAiKey())
   handle('ai:setKey', (key: string | null) => store.setAiKey(key?.trim() || null))

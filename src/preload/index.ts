@@ -89,6 +89,14 @@ const api: WinMailApi = {
   cancelScheduled: (id) => call('outbox:cancel', id),
   onScheduledChanged: (cb) => on('outbox:changed', cb),
 
+  listWaiting: () => call('waiting:list'),
+  stopWaiting: (id) => call('waiting:stop', id),
+  restoreWaiting: (item) => call('waiting:restore', item),
+  waitLonger: (id, days) => call('waiting:longer', id, days),
+  waitingMessage: (id) => call('waiting:message', id),
+  onWaitingChanged: (cb) => on('waiting:changed', cb),
+  onWaitingOpen: (cb) => on('waiting:open', cb),
+
   aiAvailable: () => call('ai:available'),
   setAiKey: (key) => call('ai:setKey', key),
   ai: (input) => call('ai:run', input),

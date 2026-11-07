@@ -32,7 +32,8 @@ export class Outbox {
     private mail: MailService,
     private changed: () => void,
     private event: (e: OutboxEvent) => void = () => {},
-    private sent: (input: SendInput) => void = () => {}
+    /** A message went out, with the Message-ID it was given. */
+    private sent: (input: SendInput, messageId: string) => void = () => {}
   ) {}
 
   /** Scheduled mail; undo-send messages belong to Compose and are not listed. */
@@ -164,13 +165,13 @@ export class Outbox {
     const kind = kindOf(item)
     let delivered = false
     try {
-      await this.mail.send(item.input, () => {
+      const messageId = await this.mail.send(item.input, () => {
         // The server has the message: leave the queue now, so a quit during the Sent copy can't resend it.
         delivered = true
         this.store.setScheduled(this.store.listScheduled().filter((s) => s.id !== id))
       })
       await rm(join(this.store.outboxDir, id), { recursive: true, force: true })
-      this.sent(item.input)
+      this.sent(item.input, messageId)
       this.event({ id, kind, state: 'sent' })
     } catch (err) {
       const error = err instanceof Error ? err.message : String(err)

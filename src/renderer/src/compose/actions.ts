@@ -16,6 +16,8 @@ import { blockingProblem, confirmations } from './checks'
 import { maxOpen } from './dockLayout'
 import { insertHtml, insertText } from './editorCommands'
 import { commitTyping, toInput } from './input'
+import { refreshAutoWait, setOwnAddresses } from './waiting'
+import { DEFAULT_WAIT_DAYS } from '@shared/waiting'
 import { htmlToPlain } from './outgoing'
 import { forwardBlock, isForwardBlock, replyQuote, replyRecipients, splitDraft, subjectFor } from './quote'
 import { IS_POPOUT, type PopoutMessage, type PopoutPayload } from './popout'
@@ -26,6 +28,7 @@ import {
   editorOf,
   flush,
   getSession,
+  ownText,
   putSession,
   removeSession,
   updateSession,
@@ -56,6 +59,7 @@ let env: ComposeEnv
 
 export function setComposeEnv(e: ComposeEnv): void {
   env = e
+  setOwnAddresses(e.accounts.map((a) => a.email))
 }
 
 /** Replies open under the message; the reading pane renders them. */
@@ -95,6 +99,7 @@ function blank(accountId: string, patch: Partial<ComposeSession>): ComposeSessio
     focus: 'to',
     revision: 0,
     signature: null,
+    wait: { on: false, days: DEFAULT_WAIT_DAYS, manual: false },
     ...patch
   }
 }
@@ -454,6 +459,18 @@ export async function reply(
   return s.id
 }
 
+/**
+ * A follow-up to a sent message nobody answered (Waiting for): reply all to it in a card of its own. It waits for
+ * a reply again unless the user turns that off; sending it ends the wait for the original.
+ */
+export async function followUp(sent: MessageSummary): Promise<string | null> {
+  const id = await reply('all', sent, null, false, 'docked')
+  if (!id) return null
+  updateSession(id, (s) => ({ wait: { ...s.wait, followUp: true } }))
+  refreshAutoWait(id)
+  return id
+}
+
 /** A forward carries the original's attachments, as Gmail's does. */
 async function attachOriginals(id: string, summary: MessageSummary): Promise<void> {
   const placeholder: ComposeAttachment = {
@@ -557,6 +574,11 @@ function fromInput(input: SendInput, patch: Partial<ComposeSession>): ComposeSes
     references: input.references,
     draftUid: accountId === input.accountId ? input.draftUid : undefined,
     focus: to.length ? 'body' : 'to',
+    // A choice saved with the draft stays; otherwise the switch follows the text again.
+    wait:
+      input.waitDays === undefined
+        ? { on: false, days: DEFAULT_WAIT_DAYS, manual: false }
+        : { on: input.waitDays > 0, days: input.waitDays > 0 ? input.waitDays : DEFAULT_WAIT_DAYS, manual: true },
     ...patch
   })
 }
@@ -615,16 +637,7 @@ export async function flushAll(): Promise<void> {
 /** Outbox items this window queued: which card they came from and their toast. */
 const queued = new Map<string, { sessionId: string; toastId: number; accountId: string }>()
 
-/** Text the user wrote, without signature and quote, for the send checks. */
-export function ownText(id: string): string {
-  const s = getSession(id)
-  const root = editorOf(id)?.root()
-  if (!s) return ''
-  if (s.plain || !root) return s.body
-  const copy = root.cloneNode(true) as HTMLElement
-  copy.querySelectorAll('.winmail-signature, .gmail_quote').forEach((el) => el.remove())
-  return copy.innerText
-}
+export { ownText }
 
 async function waitForAttachments(id: string): Promise<boolean> {
   const until = Date.now() + ATTACHMENT_WAIT_MS
@@ -674,7 +687,7 @@ export async function send(id: string, skip: Confirm['kind'][] = []): Promise<vo
 
     autosave.cancel(id)
     await autosave.settle(id)
-    s = getSession(id)!
+    s = refreshAutoWait(id) ?? getSession(id)!
     const input = toInput(s)
     updateSession(id, { hidden: 'sending' })
     env.focusList()
@@ -796,7 +809,7 @@ export async function schedule(id: string, at: Date): Promise<void> {
   }
   autosave.cancel(id)
   await autosave.settle(id)
-  const current = getSession(id)!
+  const current = refreshAutoWait(id) ?? getSession(id)!
   const uid = autosave.lastUid(id) ?? current.draftUid
   try {
     const info = await api.scheduleSend({ ...toInput(current), draftUid: undefined }, at.toISOString())

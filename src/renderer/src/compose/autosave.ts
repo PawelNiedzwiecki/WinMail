@@ -1,6 +1,7 @@
 import { api } from '../api'
 import { toInput } from './input'
 import { htmlToPlain } from './outgoing'
+import { scheduleAutoWait } from './waiting'
 import { allSessions, flush, getSession, liveBody, updateSession, type ComposeSession } from './sessions'
 
 /**
@@ -55,6 +56,7 @@ export function touch(id: string): void {
   if (!s.dirty) updateSession(id, { dirty: true })
   schedule(id)
   scheduleRecovery()
+  scheduleAutoWait(id)
 }
 
 function schedule(id: string, delay?: number): void {
@@ -181,7 +183,7 @@ export type Recovered = Pick<
   | 'inReplyTo'
   | 'references'
   | 'draftUid'
-> & { savedAt: number }
+> & { savedAt: number; wait?: ComposeSession['wait'] }
 
 let recoveryTimer: number | undefined
 
@@ -214,6 +216,7 @@ function toRecovered(s: ComposeSession): Recovered {
     inReplyTo: s.inReplyTo,
     references: s.references,
     draftUid: lastUid(s.id) ?? s.draftUid,
+    wait: s.wait,
     savedAt: Date.now()
   }
 }

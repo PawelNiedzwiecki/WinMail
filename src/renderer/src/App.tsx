@@ -39,7 +39,8 @@ import {
   type MoveTarget,
   type ScheduledInfo,
   type Settings,
-  type Unsubscribe
+  type Unsubscribe,
+  type WaitingInfo
 } from '@shared/types'
 import { optedIn } from '@shared/contentFeatures'
 import { categorize } from '@shared/categorize'
@@ -80,6 +81,7 @@ import { WhenPicker } from './components/WhenPicker'
 import { ConfirmDeleteDialog } from './components/ConfirmDeleteDialog'
 import { SourceDialog } from './components/SourceDialog'
 import { ScheduledDialog } from './components/ScheduledDialog'
+import { WaitingDialog, startFollowUp } from './components/WaitingDialog'
 import { formatWhen } from './compose/schedule'
 import { groupThreads, type Thread } from './threads'
 import { applyReduceMotion, dur, ease } from './motion'
@@ -236,6 +238,7 @@ type Dialog =
   | { kind: 'delete'; items: MessageSummary[] }
   | { kind: 'source'; subject: string; source: string }
   | { kind: 'scheduled' }
+  | { kind: 'waiting'; focusId?: string }
 
 /** Splits messages by the folder they are in, since IMAP acts on one folder at a time. */
 function byFolder(items: MessageSummary[]): { accountId: string; mailbox: string; uids: number[]; uidValidity?: string }[] {
@@ -308,6 +311,8 @@ export default function App() {
   const [asking, setAsking] = useState(false)
   const [dialog, setDialog] = useState<Dialog | null>(null)
   const [scheduled, setScheduled] = useState<ScheduledInfo[]>([])
+  /** Sent messages waiting for a reply (Waiting for). */
+  const [waiting, setWaiting] = useState<WaitingInfo[]>([])
   /** Messages of the open Gmail conversation from other folders, e.g. your replies in Sent. */
   const [threadExtra, setThreadExtra] = useState<{ key: string; list: MessageSummary[] } | null>(null)
   const [aiSummary, setAiSummary] = useState<AiSummaryState | null>(null)
@@ -605,6 +610,42 @@ export default function App() {
     const load = () => api.listScheduled().then(setScheduled, () => {})
     load()
     return api.onScheduledChanged(load)
+  }, [])
+
+  // Waiting for: the list for the sidebar entry. A nudge that comes while the window is in use gets a toast here;
+  // the main process shows a Windows notification only while WinMail is in the background.
+  const nudgedSeen = useRef<Set<string> | null>(null)
+  useEffect(() => {
+    const load = () =>
+      api.listWaiting().then((list) => {
+        setWaiting(list)
+        const known = nudgedSeen.current
+        const fresh = list.filter((w) => w.nudgedAt && known && !known.has(w.id))
+        nudgedSeen.current = new Set(list.filter((w) => w.nudgedAt).map((w) => w.id))
+        if (!fresh.length || !document.hasFocus()) return
+        const one = fresh.length === 1 ? fresh[0]! : null
+        toast({
+          text: one ? `No reply to “${one.subject || '(No Subject)'}”` : `No reply to ${fresh.length} messages`,
+          duration: 0,
+          actions: one
+            ? [
+                { label: 'Follow Up', run: () => void startFollowUp(one.id) },
+                { label: 'Open', run: () => setDialog({ kind: 'waiting', focusId: one.id }) }
+              ]
+            : [{ label: 'Open', run: () => setDialog({ kind: 'waiting' }) }]
+        })
+      }, () => {})
+    load()
+    const offChanged = api.onWaitingChanged(load)
+    // A nudge notification was clicked, or its Follow up button.
+    const offOpen = api.onWaitingOpen((e) => {
+      if (e.followUp && e.id) void startFollowUp(e.id)
+      else setDialog({ kind: 'waiting', focusId: e.id })
+    })
+    return () => {
+      offChanged()
+      offOpen()
+    }
   }, [])
 
   // A notification was clicked: show that message.
@@ -1686,6 +1727,9 @@ export default function App() {
         onAddAccount={() => setAdding(true)}
         scheduledCount={scheduled.length}
         onOpenScheduled={() => setDialog({ kind: 'scheduled' })}
+        waitingCount={waiting.length}
+        nudgedCount={waiting.filter((w) => w.nudgedAt).length}
+        onOpenWaiting={() => setDialog({ kind: 'waiting' })}
         onMailboxMenu={(accountId, path, x, y) => setBoxMenu({ accountId, path, x, y })}
         labelSets={labelSets}
       />
@@ -1909,6 +1953,9 @@ export default function App() {
         )}
         {dialog?.kind === 'scheduled' && (
           <ScheduledDialog key="scheduled" items={scheduled} accounts={accounts} onClose={() => setDialog(null)} />
+        )}
+        {dialog?.kind === 'waiting' && (
+          <WaitingDialog key="waiting" items={waiting} accounts={accounts} focusId={dialog.focusId} onClose={() => setDialog(null)} />
         )}
       </AnimatePresence>
       <ToastStack />

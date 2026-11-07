@@ -240,6 +240,35 @@ export interface SendInput {
   references?: string[]
   /** UID of this message's copy in the Drafts folder, deleted once it is sent. */
   draftUid?: number
+  /**
+   * Waiting for a reply: comes back as a nudge after this many days without one. 0 means the user turned the
+   * switch off; missing means Compose never decided (older drafts and other senders), which also means off.
+   */
+  waitDays?: number
+}
+
+/** A sent message WinMail is waiting for a reply to (Waiting for). Kept on this PC only. */
+export interface WaitingInfo {
+  id: string
+  accountId: string
+  /** The sent message's Message-ID; a reply carries it in In-Reply-To or References. */
+  messageId: string
+  /** Recipients as typed, for the list. */
+  to: string
+  subject: string
+  /** ISO time it was sent. */
+  sentAt: string
+  days: number
+  /** ISO time it comes back as a nudge unless someone replies first. */
+  dueAt: string
+  /** ISO time it came back: nobody replied in time. */
+  nudgedAt?: string
+}
+
+/** Opens the Waiting for list, e.g. from a nudge notification; `followUp` starts a follow-up to that message. */
+export interface WaitingOpenEvent {
+  id?: string
+  followUp?: boolean
 }
 
 export interface ScheduledInfo {
@@ -527,6 +556,19 @@ export interface WinMailApi {
   /** Removes it from the queue and returns it for editing. */
   cancelScheduled(id: string): Promise<SendInput>
   onScheduledChanged(cb: () => void): () => void
+
+  /** Sent messages waiting for a reply, nudged ones first, then by when they come back. */
+  listWaiting(): Promise<WaitingInfo[]>
+  /** Stops waiting for a reply; returns the item so it can be put back with `restoreWaiting`. */
+  stopWaiting(id: string): Promise<WaitingInfo>
+  restoreWaiting(item: WaitingInfo): Promise<void>
+  /** Waits `days` more from now; a nudged message goes back to waiting. */
+  waitLonger(id: string, days: number): Promise<WaitingInfo>
+  /** The sent copy of a waited-for message, found in Sent by its Message-ID; null if it is not there. */
+  waitingMessage(id: string): Promise<MessageSummary | null>
+  onWaitingChanged(cb: () => void): () => void
+  /** A nudge notification was clicked. */
+  onWaitingOpen(cb: (e: WaitingOpenEvent) => void): () => void
 
   /** Whether a Claude API key is saved. */
   aiAvailable(): Promise<boolean>

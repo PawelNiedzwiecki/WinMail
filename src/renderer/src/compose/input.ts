@@ -30,6 +30,8 @@ export function toInput(s: ComposeSession): SendInput {
     attachments: s.attachments.filter((a) => !a.pending).map(({ path, filename, size }) => ({ path, filename, size })),
     inReplyTo: s.inReplyTo,
     references: s.references,
-    draftUid: s.draftUid
+    draftUid: s.draftUid,
+    // 0 keeps "turned off" with a draft; an untouched switch that is off says nothing.
+    waitDays: s.wait.on ? s.wait.days : s.wait.manual ? 0 : undefined
   }
 }

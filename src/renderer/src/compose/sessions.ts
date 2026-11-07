@@ -28,6 +28,18 @@ export interface ReplySource {
   allowRemote: boolean
 }
 
+/** The Waiting for switch: whether the message comes back as a nudge if nobody replies in `days`. */
+export interface WaitChoice {
+  on: boolean
+  days: number
+  /** The user flipped the switch or chose a time, so it no longer follows what the message says. */
+  manual: boolean
+  /** Why it turned on by itself, for its tooltip. */
+  reason?: 'question' | 'followUp'
+  /** Written from a nudge: waits again unless turned off. */
+  followUp?: boolean
+}
+
 /** A question shown above the fields before something happens, e.g. "Send without a subject?". */
 export interface Confirm {
   text: string
@@ -79,6 +91,7 @@ export interface ComposeSession {
   revision: number
   /** The signature as inserted, to tell an untouched one from an edited one. */
   signature: { accountId: string; html: string } | null
+  wait: WaitChoice
 }
 
 /** What the dock and the message list need, without the body: it changes rarely. */
@@ -221,6 +234,17 @@ export const editorOf = (id: string) => editors.get(id)
 /** Copies what the editor shows into the session, before saving, sending or moving the card. */
 export function flush(id: string): void {
   editors.get(id)?.flush()
+}
+
+/** Text the user wrote, without signature and quote, for the send checks and the Waiting for switch. */
+export function ownText(id: string): string {
+  const s = sessions.get(id)
+  const root = editors.get(id)?.root()
+  if (!s) return ''
+  if (s.plain || !root) return s.body
+  const copy = root.cloneNode(true) as HTMLElement
+  copy.querySelectorAll('.winmail-signature, .gmail_quote').forEach((el) => el.remove())
+  return copy.innerText
 }
 
 /** The body as the editor shows it right now. */
