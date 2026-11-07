@@ -24,6 +24,10 @@ _Avoid_: Archived account, disabled account (a disabled account still has its se
 A set time of day when held Inbox mail is shown to the user, as part of Batched delivery.
 _Avoid_: Batch, sync, check (a check fetches mail; a Delivery shows it)
 
+**Held**:
+Inbox mail that arrived since the last Delivery and is hidden in WinMail until the next one: unread, and not from a VIP or the user. Nothing about it changes on the server.
+_Avoid_: Queued, delayed, hidden mail
+
 **Brief**:
 The short summary that comes with each Delivery: who wrote and what needs the user. The first Delivery of the day is the Morning brief.
 _Avoid_: Digest, summary (Summarise is a per-message feature)

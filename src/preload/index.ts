@@ -96,6 +96,10 @@ const api: WinMailApi = {
   waitingMessage: (id) => call('waiting:message', id),
   onWaitingChanged: (cb) => on('waiting:changed', cb),
   onWaitingOpen: (cb) => on('waiting:open', cb),
+  getDelivery: () => call('delivery:state'),
+  deliverNow: () => call('delivery:now'),
+  listDeliveries: () => call('delivery:list'),
+  onDeliveryChanged: (cb) => on('delivery:changed', cb),
 
   aiAvailable: () => call('ai:available'),
   setAiKey: (key) => call('ai:setKey', key),

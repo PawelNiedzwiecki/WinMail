@@ -1,9 +1,13 @@
 // Browser-only stand-in for the Electron bridge, used for UI development.
 import { assertOptedIn } from '@shared/contentFeatures'
 import { nudgeTime } from '@shared/waiting'
+import { advance, formatTime, isHeld, nextDeliveryAt, sameDay, vipAddresses, type HoldRule } from '@shared/delivery'
 import {
   DEFAULT_SETTINGS,
   type Account,
+  type DeliveryKind,
+  type DeliveryRecord,
+  type DeliveryState,
   type FailedSend,
   type LabelColour,
   type LabelInfo,
@@ -241,6 +245,15 @@ export function createMockApi(): WinMailApi {
     ...s
   }: MessageDetail) => s as MessageSummary
 
+  /** The folder list with held mail left out of the Inbox count, as MailService does it. */
+  const withoutHeld = (id: string): MailboxInfo[] => {
+    recount()
+    const held = heldIn(id).filter((m) => !m.seen).length
+    return structuredClone(boxes[id] ?? []).map((b) =>
+      b.specialUse === 'inbox' && settings.batchDelivery ? { ...b, unseen: b.unseen - held, held } : b
+    )
+  }
+
   const recount = () => {
     for (const [id, list] of Object.entries(boxes)) {
       for (const b of list) {
@@ -295,6 +308,73 @@ export function createMockApi(): WinMailApi {
     }
     waitingChanged()
   }
+
+  // Batched delivery, as Deliveries does it in main. `?batch` starts with it on and three messages held (the last
+  // Delivery a few minutes ago, the next in three hours); `?delivery` also makes a Delivery four seconds after launch.
+  let deliveredUntil: string | null = null
+  let deliveryRecords: DeliveryRecord[] = []
+  const deliveryListeners = new Set<() => void>()
+  const deliveryChanged = () => deliveryListeners.forEach((cb) => cb())
+  const until = () =>
+    settings.batchDelivery ? advance(deliveredUntil ?? new Date().toISOString(), new Date(), settings.deliveryTimes).deliveredUntil : null
+  const holdRule = (): HoldRule | null => {
+    const u = until()
+    return u ? { deliveredUntil: u, vips: vipAddresses(settings.vips), own: accounts.map((a) => a.email.toLowerCase()) } : null
+  }
+  const inboxOf = (id: string) => boxes[id]?.find((b) => b.specialUse === 'inbox')?.path
+  const heldIn = (id: string, rule = holdRule()) =>
+    rule ? messages.filter((m) => m.accountId === id && m.mailbox === inboxOf(id) && isHeld(m, rule)) : []
+  const deliver = (kind: DeliveryKind, at: Date) => {
+    const items = accounts.flatMap((a) => heldIn(a.id)).sort((a, b) => b.date.localeCompare(a.date))
+    deliveredUntil = at.toISOString()
+    const newest = deliveryRecords[0]
+    deliveryRecords = [
+      {
+        id: crypto.randomUUID(),
+        at: at.toISOString(),
+        kind,
+        first: !newest || !sameDay(new Date(newest.at), at),
+        items: items.map((m) => ({ ...summary(m), arrivedAt: m.arrivedAt ?? m.date })),
+        more: 0
+      },
+      ...deliveryRecords
+    ].slice(0, 14)
+    deliveryChanged()
+  }
+  const deliveryState = (): DeliveryState => {
+    const last = deliveryRecords[0]
+    return {
+      on: settings.batchDelivery,
+      times: settings.deliveryTimes,
+      deliveredUntil: until(),
+      nextAt: settings.batchDelivery ? nextDeliveryAt(new Date(), settings.deliveryTimes).toISOString() : null,
+      last: last ? { at: last.at, kind: last.kind, count: last.items.length + last.more } : null
+    }
+  }
+  if (!empty && (params.has('batch') || params.has('delivery'))) {
+    const now = new Date()
+    const mins = (d: Date) => d.getHours() * 60 + d.getMinutes()
+    settings = {
+      ...settings,
+      batchDelivery: true,
+      deliveryTimes: [formatTime(mins(new Date(now.getTime() - 5 * 60_000))), formatTime(mins(new Date(now.getTime() + 3 * 3600_000)))].sort()
+    }
+    deliveredUntil = ago(4)
+    messages.push(
+      msg('gmail', 'INBOX', ['Priya Shah', 'priya.shah@example.com'], 'Re: Quote for the kitchen',
+        'Hi Alex,\n\nHere is the updated quote. Can you confirm the worktop colour by Monday?\n\nPriya', 3, { parents: [] }),
+      msg('icloud', 'INBOX', ['Lena Novak', 'lena.novak@example.com'], 'Dinner next week?',
+        'Are you free on Thursday? The new place on Upper Street has a table at 7.', 2),
+      msg('gmail', 'INBOX', ['Fabrikam Store', 'news@fabrikam.example'], 'Autumn sale starts today',
+        'Up to 40% off everything in store and online.', 1)
+    )
+    if (params.has('delivery')) window.setTimeout(() => deliver('scheduled', new Date()), 4000)
+  }
+  window.setInterval(() => {
+    if (!settings.batchDelivery || !deliveredUntil) return
+    const step = advance(deliveredUntil, new Date(), settings.deliveryTimes)
+    if (step.crossed) deliver('scheduled', step.crossed)
+  }, 30_000)
 
   const find = (accountId: string, mailbox: string, u: number) => {
     // A Gmail label folder lists the messages carrying the label, wherever they are.
@@ -382,18 +462,25 @@ export function createMockApi(): WinMailApi {
       return settings
     },
     async setSettings(s) {
+      const before = settings
       settings = s
+      if (!before.batchDelivery && s.batchDelivery) deliveredUntil = new Date().toISOString()
+      if (before.batchDelivery && !s.batchDelivery) deliveredUntil = null
+      if (
+        before.batchDelivery !== s.batchDelivery ||
+        before.deliveryTimes.join() !== s.deliveryTimes.join() ||
+        vipAddresses(before.vips).join() !== vipAddresses(s.vips).join()
+      )
+        deliveryChanged()
       return s
     },
     async listMailboxes(id) {
       await unreachable(80)
-      recount()
-      return structuredClone(boxes[id] ?? [])
+      return withoutHeld(id)
     },
     async cachedMailboxes(id) {
       if (noCache) return null
-      recount()
-      return structuredClone(boxes[id] ?? [])
+      return withoutHeld(id)
     },
     async cachedList(id, mailbox, limit, view) {
       if (noCache) return null
@@ -522,7 +609,8 @@ export function createMockApi(): WinMailApi {
       }
     },
     async markAllRead(id, mailbox) {
-      messages.filter((m) => m.accountId === id && m.mailbox === mailbox).forEach((m) => (m.seen = true))
+      const held = new Set(mailbox === inboxOf(id) ? heldIn(id) : [])
+      messages.filter((m) => m.accountId === id && m.mailbox === mailbox && !held.has(m)).forEach((m) => (m.seen = true))
     },
     async move(id, mailbox, uids, target) {
       const dest =
@@ -721,6 +809,22 @@ export function createMockApi(): WinMailApi {
     onWaitingOpen(cb) {
       waitingOpenListeners.add(cb)
       return () => waitingOpenListeners.delete(cb)
+    },
+    async getDelivery() {
+      return deliveryState()
+    },
+    async deliverNow() {
+      await sleep(200)
+      if (!settings.batchDelivery) throw new Error('Batched delivery is off.')
+      deliver('now', new Date())
+      return deliveryState()
+    },
+    async listDeliveries() {
+      return structuredClone(deliveryRecords)
+    },
+    onDeliveryChanged(cb) {
+      deliveryListeners.add(cb)
+      return () => deliveryListeners.delete(cb)
     },
     async aiAvailable() {
       return !!aiKey

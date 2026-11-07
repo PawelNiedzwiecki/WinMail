@@ -54,8 +54,11 @@ export interface MailboxInfo {
   path: string
   name: string
   specialUse: SpecialUse | null
+  /** Unread messages; in an Inbox, held mail (Batched delivery) is not counted. */
   unseen: number
   depth: number
+  /** Inbox only, while Batched delivery is on: unread messages held until the next Delivery. */
+  held?: number
 }
 
 export interface Address {
@@ -92,6 +95,11 @@ export interface MessageSummary {
   subject: string
   preview: string
   date: string
+  /**
+   * When the server received it (IMAP INTERNALDATE), which Batched delivery holds by. Missing on rows saved before
+   * WinMail read it; `date` stands in.
+   */
+  arrivedAt?: string
   seen: boolean
   flagged: boolean
   hasAttachments: boolean
@@ -265,6 +273,58 @@ export interface WaitingInfo {
   nudgedAt?: string
 }
 
+/** Batched delivery as it stands now. */
+export interface DeliveryState {
+  on: boolean
+  /** Delivery times, "HH:MM", in order. */
+  times: string[]
+  /** ISO time; Inbox mail that arrived after it is held. Null while batching is off. */
+  deliveredUntil: string | null
+  /** ISO time of the next Delivery; null while batching is off. */
+  nextAt: string | null
+  /** The last Delivery WinMail made, if any. */
+  last: { at: string; kind: DeliveryKind; count: number } | null
+}
+
+/**
+ * How a Delivery came about: a Delivery time passed while WinMail ran; WinMail started (or woke) after Delivery times
+ * it missed; or the user pressed Deliver Now.
+ */
+export type DeliveryKind = 'scheduled' | 'catch-up' | 'now'
+
+/** A held message that a Delivery showed. */
+export interface DeliveredItem {
+  accountId: string
+  mailbox: string
+  uid: number
+  uidValidity?: string
+  messageId?: string | null
+  parents?: string[]
+  from: Address
+  to: Address[]
+  subject: string
+  preview: string
+  /** ISO time the server received it. */
+  arrivedAt: string
+  category?: GmailCategory
+  flagged: boolean
+  hasAttachments: boolean
+}
+
+/** One Delivery: what it showed. Kept on this PC (the last 14) for the Brief. */
+export interface DeliveryRecord {
+  id: string
+  /** ISO: the Delivery time for scheduled ones, when it happened for catch-up and Deliver Now. */
+  at: string
+  kind: DeliveryKind
+  /** The first Delivery of its local day; its Brief is the Morning brief. */
+  first: boolean
+  /** Newest first, at most 200. */
+  items: DeliveredItem[]
+  /** How many more were delivered than `items` holds. */
+  more: number
+}
+
 /** Opens the Waiting for list, e.g. from a nudge notification; `followUp` starts a follow-up to that message. */
 export interface WaitingOpenEvent {
   id?: string
@@ -412,6 +472,12 @@ export interface Settings {
   templates: Template[]
   /** Which Claude features may send message content (ADR 0001); all off by default. */
   contentOptIns: ContentOptIns
+  /** Batched delivery: hold new Inbox mail and show it at `deliveryTimes`. */
+  batchDelivery: boolean
+  /** "HH:MM", local time, in order; 1 to 6. */
+  deliveryTimes: string[]
+  /** People whose mail is never held. */
+  vips: Contact[]
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -438,7 +504,10 @@ export const DEFAULT_SETTINGS: Settings = {
   composeFormat: 'rich',
   reduceMotion: false,
   templates: [],
-  contentOptIns: NO_OPT_INS
+  contentOptIns: NO_OPT_INS,
+  batchDelivery: false,
+  deliveryTimes: ['09:00', '13:00', '17:00'],
+  vips: []
 }
 
 export interface TestResult {
@@ -569,6 +638,15 @@ export interface WinMailApi {
   onWaitingChanged(cb: () => void): () => void
   /** A nudge notification was clicked. */
   onWaitingOpen(cb: (e: WaitingOpenEvent) => void): () => void
+
+  /** Batched delivery: whether it is on, what is held, and the next Delivery. */
+  getDelivery(): Promise<DeliveryState>
+  /** Shows held mail now (Deliver Now). */
+  deliverNow(): Promise<DeliveryState>
+  /** The last Deliveries, newest first. */
+  listDeliveries(): Promise<DeliveryRecord[]>
+  /** Batching was turned on or off, its times changed, or a Delivery happened: held mail may show now. */
+  onDeliveryChanged(cb: () => void): () => void
 
   /** Whether a Claude API key is saved. */
   aiAvailable(): Promise<boolean>
