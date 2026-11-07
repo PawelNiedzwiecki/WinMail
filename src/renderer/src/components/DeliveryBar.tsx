@@ -1,7 +1,7 @@
 import { Clock } from 'lucide-react'
 import { useState } from 'react'
 import type { DeliveryState } from '@shared/types'
-import { sameDay } from '@shared/delivery'
+import { hhmm, sameDay } from '@shared/delivery'
 
 interface Props {
   state: DeliveryState
@@ -9,8 +9,6 @@ interface Props {
   /** The Brief is shown below, and says when the last Delivery was. */
   briefShown?: boolean
 }
-
-const hhmm = (d: Date) => d.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })
 
 /** "13:00", "tomorrow at 09:00", or a weekday for anything further off. */
 function when(iso: string, now = new Date()): string {

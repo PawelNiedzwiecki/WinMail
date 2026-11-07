@@ -24,6 +24,13 @@ const SYSTEM: Record<AiInput['task'], string> = {
     'anything that is not in the emails.'
 }
 
+/** The user message each task sends: one email with its envelope, or the Brief's list, which carries its own. */
+const CONTENT: Record<AiInput['task'], (input: AiInput, body: string) => string> = {
+  summarise: (i, body) => `From: ${i.from}\nSubject: ${i.subject}\n\n${body}`,
+  reply: (i, body) => `From: ${i.from}\nSubject: ${i.subject}\n\n${body}`,
+  brief: (_i, body) => body
+}
+
 /**
  * Summaries, suggested replies and the Brief's paragraph with the user's own Claude API key. These send message
  * content, so each task is refused here unless its Content opt-in is on (ADR 0001); hiding the buttons is not enough.
@@ -31,12 +38,10 @@ const SYSTEM: Record<AiInput['task'], string> = {
 export async function runAi(store: Store, input: AiInput): Promise<string> {
   assertOptedIn(store.getSettings(), input.task)
   const body = input.text.length > MAX_INPUT_CHARS ? `${input.text.slice(0, MAX_INPUT_CHARS)}\n[…]` : input.text
-  // The Brief's text is already a list of messages, each with its own sender and subject.
-  const content = input.task === 'brief' ? body : `From: ${input.from}\nSubject: ${input.subject}\n\n${body}`
   const response = await request(store, {
     max_tokens: 4000,
     system: SYSTEM[input.task],
-    messages: [{ role: 'user', content }]
+    messages: [{ role: 'user', content: CONTENT[input.task](input, body) }]
   })
   const text = textOf(response)
   if (!text) throw new Error('Claude returned no text.')

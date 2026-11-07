@@ -194,14 +194,14 @@ export class Notifier {
     if (!list.length) return
     const newest = list[0]!
     if (record.first && s.batchDelivery && s.brief && s.morningBriefNotify) {
+      // Counted from the mail that may notify: muted accounts and filtered-out mail are left out of the numbers too.
+      const keys = new Set(list.map((m) => m.key))
+      const items = record.items.filter((i) => keys.has(`${i.accountId}|${i.mailbox}|${i.uid}`))
+      const waiting = this.d.store.listWaiting().filter((w) => !s.notifyMutedAccounts.includes(w.accountId))
       const brief = makeBrief(
-        record,
-        {
-          own: this.d.store.listAccounts().map((a) => a.email),
-          vips: s.vips,
-          waitingIds: this.d.store.listWaiting().map((w) => w.messageId)
-        },
-        { records: this.d.store.getDelivery().records, waiting: this.d.store.listWaiting() }
+        { ...record, items, more: items.length === record.items.length ? record.more : 0 },
+        { own: this.d.store.listAccounts().map((a) => a.email), vips: s.vips, waitingIds: waiting.map((w) => w.messageId) },
+        { records: this.d.store.getDelivery().records, waiting }
       )
       const notice = morningNotice(brief)
       const n = new Notification({ id: tag(`delivery|${record.id}`), ...notice, silent: !s.notifySound })

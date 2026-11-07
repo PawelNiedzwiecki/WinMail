@@ -43,6 +43,7 @@ import { getProvider } from '../shared/providers'
 import { categorize } from '../shared/categorize'
 import { isAutomatic } from '../shared/waiting'
 import { isHeld, type Holdable, type HoldRule } from '../shared/delivery'
+import { OWN_ID_PREFIX } from '../shared/brief'
 import type { FlagRow, FolderState, FolderStatus, MailCache, SnapState } from './cache'
 import type { AccountLabelStore, Snoozed, Store } from './store'
 import {
@@ -1944,7 +1945,8 @@ export class MailService {
       inReplyTo: input.inReplyTo,
       references: input.references,
       icalEvent: calendar,
-      messageId: `<${randomUUID()}@${acc.email.split('@')[1] ?? 'winmail'}>`,
+      // Marked as WinMail's, so the Brief can tell replies to the user from other mail at the same domain.
+      messageId: `<${OWN_ID_PREFIX}${randomUUID()}@${acc.email.split('@')[1] ?? 'winmail'}>`,
       date: new Date(),
       // Attachments are local files only; never let a path fetch a URL.
       disableUrlAccess: true

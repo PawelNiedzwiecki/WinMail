@@ -191,7 +191,7 @@ The Brief of the day's `first` Delivery. It adds:
 Choices made while building, within the decisions above:
 
 - **"From a person"** also leaves out bulk mail (List-Id, List-Unsubscribe, Precedence) and Updates, unless an Updates message answers something. Otherwise a bank statement or receipt sent straight to the user would be "Needs you" for being in To.
-- **"Replied to you"** checks the Waiting for list and, more reliably, the UUID-shaped Message-IDs WinMail gives mail sent from the user's own domains. A held reply usually ends its wait when it is first fetched, before the Delivery, so the Waiting for list alone would often miss it.
+- **"Replied to you"** checks the Waiting for list and, more reliably, the Message-IDs WinMail gives mail it sends, which now start `<winmail.` (a bare UUID at the user's domain was not enough: Apple Mail and Thunderbird use those for anyone at icloud.com or gmail.com). A held reply usually ends its wait when it is first fetched, before the Delivery, so the Waiting for list alone would often miss it.
 - **New record fields** (`hasInvite`, `bulk`, `automatic`) come from the FETCH `heldBetween` already makes, with no extra request. Records saved before Part 2 lack them and are sorted by sender and category alone.
 - **The overnight count** is the Morning brief's own count, since its record covers everything since the previous Delivery. So the line says "All 12 came overnight, since 17:00 yesterday" rather than repeating the number as news.
 - **The Morning brief notification** replaces the plain Delivery notification for a scheduled first Delivery. Catch-up Deliveries (WinMail started after 09:00) still announce nothing, as Part 1 decided. It shows only counts, so the preview setting doesn't change it.

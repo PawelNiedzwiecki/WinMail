@@ -5,7 +5,7 @@
  * notification). Local only: nothing here talks to a server or to Claude.
  */
 import { categorize } from './categorize'
-import { isVip } from './delivery'
+import { hhmm, isVip, sameDay } from './delivery'
 import { asksQuestion, isAutomatic, isListAddress } from './waiting'
 import type { Contact, DeliveredItem, DeliveryRecord, GmailCategory, WaitingInfo } from './types'
 
@@ -58,6 +58,8 @@ export interface Brief {
   morning: boolean
   /** Every message the Delivery showed, including those beyond the listed 200. */
   count: number
+  /** Delivered but not listed in the record (beyond the 200). */
+  more: number
   needs: NeedsRow[]
   people: PersonGroup[]
   kinds: KindGroup[]
@@ -71,8 +73,14 @@ export interface Brief {
 
 const lower = (s: string) => s.trim().toLowerCase()
 
-/** UUID-shaped Message-IDs at the user's own domains: what WinMail gives the mail it sends. */
-const OWN_ID = /^<[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}@([^<>@\s]+)>$/i
+/**
+ * Marks the local part of the Message-IDs WinMail gives the mail it sends ("<winmail.UUID@domain>"). Apple Mail and
+ * Thunderbird also use bare UUIDs at the sender's domain, so without the mark another person on the same domain
+ * (icloud.com, gmail.com) would look like the user.
+ */
+export const OWN_ID_PREFIX = 'winmail.'
+
+const OWN_ID = /^<winmail\.[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}@([^<>@\s]+)>$/i
 
 /** Whether a Message-ID is one WinMail gave a message the user sent from one of `own`'s domains. */
 export function isOwnMessageId(id: string, own: string[]): boolean {
@@ -187,6 +195,7 @@ export function makeBrief(
     kind: record.kind,
     morning,
     count,
+    more: record.more,
     needs,
     people: [...people.values()].sort((a, b) => b.items.length - a.items.length || a.name.localeCompare(b.name)),
     kinds: kindGroups,
@@ -198,8 +207,6 @@ export function makeBrief(
 
 const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`
 
-const hhmm = (iso: string) => new Date(iso).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })
-
 /** "13:00 delivery · 7 messages", or "Morning brief · 09:00 · 12 messages". */
 export function briefHeading(b: Pick<Brief, 'at' | 'morning' | 'count'>): string {
   const n = plural(b.count, 'message')
@@ -210,9 +217,8 @@ export function briefHeading(b: Pick<Brief, 'at' | 'morning' | 'count'>): string
 export function sinceText(iso: string, now: Date): string {
   const d = new Date(iso)
   const yesterday = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1, 12)
-  const same = (a: Date, b: Date) => a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate()
-  if (same(d, now)) return hhmm(iso)
-  if (same(d, yesterday)) return `${hhmm(iso)} yesterday`
+  if (sameDay(d, now)) return hhmm(iso)
+  if (sameDay(d, yesterday)) return `${hhmm(iso)} yesterday`
   return `${d.toLocaleDateString('en-GB', { weekday: 'long' })} at ${hhmm(iso)}`
 }
 

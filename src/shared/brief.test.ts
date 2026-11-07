@@ -83,9 +83,15 @@ describe('fromPerson', () => {
 
 describe('isOwnMessageId', () => {
   it('matches the Message-IDs WinMail gives sent mail at the user’s own domains', () => {
-    expect(isOwnMessageId('<1b4e28ba-2fa1-41d2-883f-0016d3cca427@example.com>', [ME])).toBe(true)
-    expect(isOwnMessageId('<1B4E28BA-2FA1-41D2-883F-0016D3CCA427@WORK.example>', ctx.own)).toBe(true)
-    expect(isOwnMessageId('<1b4e28ba-2fa1-41d2-883f-0016d3cca427@other.example>', [ME])).toBe(false)
+    expect(isOwnMessageId('<winmail.1b4e28ba-2fa1-41d2-883f-0016d3cca427@example.com>', [ME])).toBe(true)
+    expect(isOwnMessageId('<winmail.1b4e28ba-2fa1-41d2-883f-0016d3cca427@WORK.example>', ctx.own)).toBe(true)
+    expect(isOwnMessageId('<winmail.1b4e28ba-2fa1-41d2-883f-0016d3cca427@other.example>', [ME])).toBe(false)
+  })
+
+  it('does not take another mail app’s bare UUID at the same domain for the user’s', () => {
+    // Apple Mail and Thunderbird give IDs like these to anyone's mail at a shared domain.
+    expect(isOwnMessageId('<1b4e28ba-2fa1-41d2-883f-0016d3cca427@example.com>', [ME])).toBe(false)
+    expect(isOwnMessageId('<1B4E28BA-2FA1-41D2-883F-0016D3CCA427@example.com>', [ME])).toBe(false)
     expect(isOwnMessageId('<CAF=abc123@mail.gmail.com>', [ME])).toBe(false)
   })
 })
@@ -101,7 +107,7 @@ describe('needsYou', () => {
     expect(needsYou(jane('Lunch?', { hasInvite: true }), vips)).toBe('vip')
     expect(needsYou(jane('Invitation: review', { hasInvite: true, preview: 'Can you come?' }), ctx)).toBe('invite')
     expect(needsYou(jane('Re: Quote', { parents: ['<q@example.com>'], preview: 'Any thoughts?' }), { ...ctx, waitingIds: ['<q@example.com>'] })).toBe('replied')
-    expect(needsYou(jane('Re: Quote', { parents: ['<1b4e28ba-2fa1-41d2-883f-0016d3cca427@example.com>'] }), ctx)).toBe('replied')
+    expect(needsYou(jane('Re: Quote', { parents: ['<winmail.1b4e28ba-2fa1-41d2-883f-0016d3cca427@example.com>'] }), ctx)).toBe('replied')
     expect(needsYou(jane('Dinner', { preview: 'Are you free on Thursday?' }), ctx)).toBe('question')
     expect(needsYou(jane('Dinner', { preview: 'Let me know by Friday.' }), ctx)).toBe('question')
     expect(needsYou(jane('Notes', { flagged: true }), ctx)).toBe('flagged')

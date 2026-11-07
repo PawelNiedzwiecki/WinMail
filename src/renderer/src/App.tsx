@@ -366,6 +366,8 @@ export default function App() {
   const [briefDismissed, setBriefDismissed] = useState<string | null>(dismissedBrief)
   /** The Claude paragraph of each Brief, by Delivery record id. */
   const [briefTexts, setBriefTexts] = useState<Record<string, BriefParagraph>>({})
+  /** Bumped by "Try again" on a failed Claude paragraph. */
+  const [briefRetry, setBriefRetry] = useState(0)
   /** Messages of the open Gmail conversation from other folders, e.g. your replies in Sent. */
   const [threadExtra, setThreadExtra] = useState<{ key: string; list: MessageSummary[] } | null>(null)
   const [aiSummary, setAiSummary] = useState<AiSummaryState | null>(null)
@@ -731,7 +733,8 @@ export default function App() {
     if (key && messages.some((m) => m.key === key)) {
       pendingOpen.current = null
       setChecked(new Set())
-      setSelectedKey(key)
+      // In a conversation, its row is the newest message's.
+      setSelectedKey(threads.get(key)?.latest.key ?? key)
     }
   }, [messages])
 
@@ -884,8 +887,9 @@ export default function App() {
   const briefAi = optedIn(settings, 'brief')
   useEffect(() => {
     if (!briefId || !briefAi) return
+    // A failed one is asked again when the opt-in is turned back on or the user tries again.
     const st = briefTexts[briefId]
-    if (st && st.state !== 'off') return
+    if (st && (st.state === 'loading' || st.state === 'done')) return
     let live = true
     void api.aiAvailable().then((ok) => {
       if (!live || !ok) return
@@ -899,7 +903,7 @@ export default function App() {
       live = false
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [briefId, briefAi])
+  }, [briefId, briefAi, briefRetry])
   const briefParagraph: BriefParagraph = (briefAi && briefId && briefTexts[briefId]) || { state: 'off' }
 
   /** Opens a message from the Brief: selected in the list when it is there, otherwise in its own Inbox. */
@@ -907,7 +911,8 @@ export default function App() {
     const key = `${item.accountId}|${item.mailbox}|${item.uid}`
     if (messages.some((m) => m.key === key)) {
       setChecked(new Set())
-      setSelectedKey(key)
+      // In a conversation, its row is the newest message's.
+      setSelectedKey(threads.get(key)?.latest.key ?? key)
       return
     }
     pendingOpen.current = key
@@ -1965,6 +1970,7 @@ export default function App() {
                         paragraph={briefParagraph}
                         onOpen={openDelivered}
                         onOpenWaiting={(w) => setDialog({ kind: 'waiting', focusId: w.id })}
+                        onRetry={() => setBriefRetry((n) => n + 1)}
                         onDismiss={() => dismissBrief(brief.recordId)}
                       />
                     )}

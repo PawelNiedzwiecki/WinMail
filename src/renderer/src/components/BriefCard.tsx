@@ -2,6 +2,7 @@ import { ChevronDown, Clock, Sparkles, X } from 'lucide-react'
 import { useState } from 'react'
 import type { DeliveredItem, WaitingInfo } from '@shared/types'
 import { REASON_TEXT, briefHeading, sinceText, type Brief } from '@shared/brief'
+import { hhmm } from '@shared/delivery'
 
 /** The Claude paragraph: off (no opt-in or no key), being written, written, or failed. */
 export type BriefParagraph = { state: 'off' } | { state: 'loading' } | { state: 'done'; text: string } | { state: 'error'; error: string }
@@ -11,6 +12,8 @@ interface Props {
   paragraph: BriefParagraph
   onOpen: (item: DeliveredItem) => void
   onOpenWaiting: (w: WaitingInfo) => void
+  /** Asks Claude again after the paragraph failed. */
+  onRetry: () => void
   onDismiss: () => void
 }
 
@@ -18,7 +21,6 @@ interface Props {
 const FIRST_ROWS = 4
 
 const day = (iso: string) => new Date(iso).toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' })
-const hhmm = (iso: string) => new Date(iso).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })
 const firstName = (s: string) => s.replace(/<.*>/, '').replace(/"/g, '').trim().split(/[\s,]+/)[0] || s
 
 /** "no reply since Tue 3 Nov" for a nudged message, "due 16:00" for one coming back today. */
@@ -32,7 +34,7 @@ function waitingWhy(w: WaitingInfo): string {
  * and the replies still awaited. All local; the optional Claude paragraph comes in above when it is ready and the
  * card never waits for it.
  */
-export function BriefCard({ brief, paragraph, onOpen, onOpenWaiting, onDismiss }: Props) {
+export function BriefCard({ brief, paragraph, onOpen, onOpenWaiting, onRetry, onDismiss }: Props) {
   const [allNeeds, setAllNeeds] = useState(false)
   const [openKind, setOpenKind] = useState<string | null>(null)
   const needs = allNeeds ? brief.needs : brief.needs.slice(0, FIRST_ROWS)
@@ -68,7 +70,14 @@ export function BriefCard({ brief, paragraph, onOpen, onOpenWaiting, onDismiss }
             </div>
             {paragraph.state === 'loading' && <p className="brief-ai-text is-loading">Claude is writing a summary…</p>}
             {paragraph.state === 'done' && <p className="brief-ai-text">{paragraph.text}</p>}
-            {paragraph.state === 'error' && <p className="brief-ai-text is-error">{paragraph.error}</p>}
+            {paragraph.state === 'error' && (
+              <p className="brief-ai-text is-error">
+                {paragraph.error}{' '}
+                <button type="button" className="brief-more" onClick={onRetry}>
+                  Try again
+                </button>
+              </p>
+            )}
           </div>
         )}
 
@@ -144,11 +153,7 @@ export function BriefCard({ brief, paragraph, onOpen, onOpenWaiting, onDismiss }
             )}
           </div>
         )}
-        {brief.count > brief.needs.length + brief.people.reduce((n, p) => n + p.items.length, 0) + brief.kindCount && (
-          <p className="brief-overnight">
-            {brief.count - brief.needs.length - brief.people.reduce((n, p) => n + p.items.length, 0) - brief.kindCount} more not listed.
-          </p>
-        )}
+        {brief.more > 0 && <p className="brief-overnight">{brief.more} more not listed.</p>}
       </div>
     </section>
   )
