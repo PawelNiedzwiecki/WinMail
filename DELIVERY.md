@@ -138,6 +138,7 @@ While batching is on, a thin strip sits above the Inbox and All Inboxes list: **
 - [x] Mail service, notifier, store, IPC, preload, mock API
 - [x] Window: held rows dropped from Inbox lists, the strip, Settings > Delivery, VIP menu items
 - [x] Checked in mock mode with Playwright: held mail hidden and left out of the counts, Deliver Now, a scheduled Delivery, search still finding held mail, adding a VIP showing their held mail, VIP menu items, turning off and on, Mark All as Read leaving held mail unread, light, dark, 900 × 560
+- [x] PR review fixes: future-dated mail shows, Deliver Now waits for a running Delivery and lists everything since the saved point, the held count is refreshed when HIGHESTMODSEQ changes or after 2 minutes, the 500-message limit is logged
 - [ ] Real accounts: the held count and Inbox list on Gmail and an IMAP server, a Delivery notification on Windows, Mark All as Read with held mail
 - [x] Part 2: the Brief and the Morning brief (see its status below)
 

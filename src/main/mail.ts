@@ -156,8 +156,14 @@ const STATUS_FRESH_MS = 10_000
 
 /** More new messages than this in one folder start its saved list again instead of being fetched one by one. */
 const MAX_NEW_MESSAGES = 200
-/** Unread Inbox messages looked at to find held mail: the newest ones, which is where held mail is. */
+/**
+ * Unread Inbox messages looked at to find held mail: the newest ones, which is where held mail is. Past this many
+ * unread messages since the day before the last Delivery, the older ones count as shown (failing open: they show in
+ * the count, and Mark All as Read marks them), which is logged.
+ */
 const MAX_HELD_SCAN = 500
+/** How long a held count is reused while the Inbox looks unchanged; covers servers without CONDSTORE. */
+const HELD_MEMO_MS = 2 * 60_000
 
 const CATEGORY_QUERY = /^category:\w+$/
 
@@ -439,7 +445,7 @@ export class MailService {
   /** What Batched delivery holds right now; null while it is off. */
   private holdRule: () => HoldRule | null = () => null
   /** Held Inbox UIDs per account, remembered while the Inbox and the rule stay the same. */
-  private heldMemo = new Map<string, { key: string; uids: number[] }>()
+  private heldMemo = new Map<string, { key: string; uids: number[]; at: number }>()
 
   holdBy(fn: () => HoldRule | null): void {
     this.holdRule = fn
@@ -751,7 +757,8 @@ export class MailService {
     if (inbox.unseen > 0) {
       const st = states.get(inbox.path)
       try {
-        held = await this.heldUids(accountId, inbox.path, rule, st ? `${st.uidValidity}|${st.uidNext}|${inbox.unseen}` : null)
+        const status = st && `${st.uidValidity}|${st.uidNext}|${inbox.unseen}|${st.highestModseq ?? ''}`
+        held = await this.heldUids(accountId, inbox.path, rule, status ?? null)
       } catch (err) {
         console.error('[delivery] could not read held mail:', err instanceof Error ? err.message : err)
         held = this.heldFromCache(accountId, inbox.path, rule).map((m) => m.uid)
@@ -767,18 +774,18 @@ export class MailService {
 
   /**
    * UIDs of the held messages in an account's Inbox: unread ones the server received after the last Delivery, from
-   * neither a VIP nor the user. `status` (UIDVALIDITY, UIDNEXT and the unread count) lets the answer be reused until
-   * the Inbox changes.
+   * neither a VIP nor the user. `status` (UIDVALIDITY, UIDNEXT, the unread count and HIGHESTMODSEQ) lets the answer
+   * be reused until the Inbox changes, for at most `HELD_MEMO_MS`.
    */
   private async heldUids(accountId: string, inbox: string, rule: HoldRule, status: string | null): Promise<number[]> {
     const key = status && `${status}|${rule.deliveredUntil}|${rule.vips.join(',')}|${rule.own.join(',')}`
     const memo = this.heldMemo.get(accountId)
-    if (key && memo?.key === key) return memo.uids
+    if (key && memo?.key === key && Date.now() - memo.at < HELD_MEMO_MS) return memo.uids
     const uids = await this.withMailbox(accountId, inbox, async (c) => {
       const rows = await this.unreadSince(c, rule.deliveredUntil)
       return rows.filter((r) => isHeld(r, rule)).map((r) => r.uid)
     })
-    if (key) this.heldMemo.set(accountId, { key, uids })
+    if (key) this.heldMemo.set(accountId, { key, uids, at: Date.now() })
     return uids
   }
 
@@ -791,6 +798,9 @@ export class MailService {
     const since = new Date(Date.parse(after) - 24 * 60 * 60_000)
     const found = await c.search({ seen: false, since }, { uid: true })
     if (!Array.isArray(found) || !found.length) return []
+    if (found.length > MAX_HELD_SCAN) {
+      console.warn(`[delivery] ${found.length} unread messages since the last Delivery; only the newest ${MAX_HELD_SCAN} can be held`)
+    }
     const newest = found.sort((a, b) => b - a).slice(0, MAX_HELD_SCAN)
     const rows = await c.fetchAll(packUids(newest), { uid: true, flags: true, envelope: true, internalDate: true }, { uid: true })
     const start = Date.parse(after)

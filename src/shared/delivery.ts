@@ -124,14 +124,21 @@ export function isVip(email: string, vips: Contact[]): boolean {
 }
 
 /**
+ * An arrival time further ahead of this PC's clock than this is not believed (a server clock that is wrong, or mail
+ * stored with a made-up date): such mail is shown, not held until real time catches up with it.
+ */
+export const FUTURE_SLACK_MS = 10 * 60_000
+
+/**
  * Whether an Inbox message is held until the next Delivery: unread, arrived after the last one, and not from a VIP or
  * the user. The caller checks that it is in an Inbox; a null rule means batching is off.
  */
-export function isHeld(m: Holdable, rule: HoldRule | null): boolean {
+export function isHeld(m: Holdable, rule: HoldRule | null, now = Date.now()): boolean {
   if (!rule || m.seen) return false
   const arrived = Date.parse(m.arrivedAt ?? m.date)
   const until = Date.parse(rule.deliveredUntil)
   if (!Number.isFinite(arrived) || !Number.isFinite(until) || arrived <= until) return false
+  if (arrived > now + FUTURE_SLACK_MS) return false
   const from = m.from.email.trim().toLowerCase()
   return !rule.vips.includes(from) && !rule.own.includes(from)
 }

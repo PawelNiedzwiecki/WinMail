@@ -126,32 +126,41 @@ describe('isHeld', () => {
     ...patch
   })
 
+  /** The tests' "now": the evening of the day the messages arrive. */
+  const NOW = local(2026, 11, 7, 20).getTime()
+  const held = (m: Holdable, r: HoldRule | null = rule) => isHeld(m, r, NOW)
+
   it('holds unread mail that arrived after the last Delivery', () => {
-    expect(isHeld(msg(), rule)).toBe(true)
+    expect(held(msg())).toBe(true)
+  })
+
+  it('shows mail dated well ahead of this PC’s clock instead of holding it until then', () => {
+    expect(held(msg({ arrivedAt: new Date(NOW + 5 * 60_000).toISOString() }))).toBe(true)
+    expect(held(msg({ arrivedAt: new Date(NOW + 60 * 60_000).toISOString() }))).toBe(false)
   })
 
   it('goes by arrival, not the Date header', () => {
-    expect(isHeld(msg({ date: local(2026, 11, 7, 15).toISOString(), arrivedAt: local(2026, 11, 7, 12).toISOString() }), rule)).toBe(false)
+    expect(held(msg({ date: local(2026, 11, 7, 15).toISOString(), arrivedAt: local(2026, 11, 7, 12).toISOString() }))).toBe(false)
   })
 
   it('uses the Date header for rows saved without an arrival time', () => {
-    expect(isHeld(msg({ arrivedAt: undefined, date: local(2026, 11, 7, 14).toISOString() }), rule)).toBe(true)
-    expect(isHeld(msg({ arrivedAt: undefined }), rule)).toBe(false)
+    expect(held(msg({ arrivedAt: undefined, date: local(2026, 11, 7, 14).toISOString() }))).toBe(true)
+    expect(held(msg({ arrivedAt: undefined }))).toBe(false)
   })
 
   it('shows mail from exactly the Delivery time', () => {
-    expect(isHeld(msg({ arrivedAt: rule.deliveredUntil }), rule)).toBe(false)
+    expect(held(msg({ arrivedAt: rule.deliveredUntil }))).toBe(false)
   })
 
   it('never holds read mail, VIPs, the user, or anything while batching is off', () => {
-    expect(isHeld(msg({ seen: true }), rule)).toBe(false)
-    expect(isHeld(msg({ from: { name: 'Boss', email: 'Boss@Example.com ' } }), rule)).toBe(false)
-    expect(isHeld(msg({ from: { name: 'Me', email: 'me@example.com' } }), rule)).toBe(false)
-    expect(isHeld(msg(), null)).toBe(false)
+    expect(held(msg({ seen: true }))).toBe(false)
+    expect(held(msg({ from: { name: 'Boss', email: 'Boss@Example.com ' } }))).toBe(false)
+    expect(held(msg({ from: { name: 'Me', email: 'me@example.com' } }))).toBe(false)
+    expect(held(msg(), null)).toBe(false)
   })
 
   it('treats unreadable dates as not held', () => {
-    expect(isHeld(msg({ arrivedAt: 'not a date', date: 'nor this' }), rule)).toBe(false)
+    expect(held(msg({ arrivedAt: 'not a date', date: 'nor this' }))).toBe(false)
   })
 })
 
