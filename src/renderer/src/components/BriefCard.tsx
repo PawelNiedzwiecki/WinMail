@@ -21,7 +21,8 @@ interface Props {
 const FIRST_ROWS = 4
 
 const day = (iso: string) => new Date(iso).toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' })
-const firstName = (s: string) => s.replace(/<.*>/, '').replace(/"/g, '').trim().split(/[\s,]+/)[0] || s
+/** The first name of "Priya Shah <priya@…>" (or the address itself, when there is no name). */
+const firstName = (s: string) => (s.split('<')[0] ?? '').replace(/"/g, '').trim().split(/[\s,]+/)[0] || s.trim()
 
 /** "no reply since Tue 3 Nov" for a nudged message, "due 16:00" for one coming back today. */
 function waitingWhy(w: WaitingInfo): string {
