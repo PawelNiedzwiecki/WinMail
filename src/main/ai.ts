@@ -1,5 +1,6 @@
 import Anthropic from '@anthropic-ai/sdk'
-import type { AiInput, MailQuery } from '../shared/types'
+import type { AiInput, DeliveryRecord, MailQuery } from '../shared/types'
+import { briefPrompt } from '../shared/brief'
 import { assertOptedIn } from '../shared/contentFeatures'
 import type { Store } from './store'
 
@@ -15,12 +16,24 @@ const SYSTEM: Record<AiInput['task'], string> = {
   reply:
     'Draft a reply to the email on behalf of its recipient. Match the language and formality of the email, keep it ' +
     'short, and leave placeholders like [time] for facts you do not know. Output only the reply body, no subject ' +
-    'line, greeting-only lines are fine, no signature.'
+    'line, greeting-only lines are fine, no signature.',
+  brief:
+    'These emails were just delivered to the user together. Write one short paragraph (2 to 4 sentences) that tells ' +
+    'them what came: first anything that needs them (questions, invitations, replies, deadlines), naming the people, ' +
+    'then the rest in passing. Plain text in British English, no preamble, no lists, no greeting. Do not invent ' +
+    'anything that is not in the emails.'
+}
+
+/** The user message each task sends: one email with its envelope, or the Brief's list, which carries its own. */
+const CONTENT: Record<AiInput['task'], (input: AiInput, body: string) => string> = {
+  summarise: (i, body) => `From: ${i.from}\nSubject: ${i.subject}\n\n${body}`,
+  reply: (i, body) => `From: ${i.from}\nSubject: ${i.subject}\n\n${body}`,
+  brief: (_i, body) => body
 }
 
 /**
- * Summaries and suggested replies with the user's own Claude API key. These send message content, so each task is
- * refused here unless its Content opt-in is on (ADR 0001); hiding the buttons is not enough.
+ * Summaries, suggested replies and the Brief's paragraph with the user's own Claude API key. These send message
+ * content, so each task is refused here unless its Content opt-in is on (ADR 0001); hiding the buttons is not enough.
  */
 export async function runAi(store: Store, input: AiInput): Promise<string> {
   assertOptedIn(store.getSettings(), input.task)
@@ -28,10 +41,30 @@ export async function runAi(store: Store, input: AiInput): Promise<string> {
   const response = await request(store, {
     max_tokens: 4000,
     system: SYSTEM[input.task],
-    messages: [{ role: 'user', content: `From: ${input.from}\nSubject: ${input.subject}\n\n${body}` }]
+    messages: [{ role: 'user', content: CONTENT[input.task](input, body) }]
   })
   const text = textOf(response)
   if (!text) throw new Error('Claude returned no text.')
+  return text
+}
+
+/** Claude paragraphs already written, by Delivery record id, so reopening the window does not send the mail again. */
+const briefs = new Map<string, string>()
+
+/**
+ * The Brief's Claude-written paragraph for one Delivery: the sender, subject and preview of each message it brought
+ * (`briefPrompt`). Goes through `runAi`, so the Brief Content opt-in is checked there.
+ */
+export async function briefParagraph(store: Store, record: DeliveryRecord): Promise<string> {
+  const done = briefs.get(record.id)
+  if (done) {
+    assertOptedIn(store.getSettings(), 'brief')
+    return done
+  }
+  if (!record.items.length) throw new Error('This delivery brought no mail.')
+  const text = await runAi(store, { task: 'brief', from: '', subject: '', text: briefPrompt(record) })
+  briefs.set(record.id, text)
+  while (briefs.size > 14) briefs.delete(briefs.keys().next().value!)
   return text
 }
 

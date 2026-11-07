@@ -80,6 +80,20 @@ describe('Deliveries', () => {
     expect(t.heldBetween.mock.calls.map((c) => c[0])).toEqual(['a', 'b'])
   })
 
+  it('keeps what the Brief reads (an invitation, bulk or automatic mail) in the record', async () => {
+    const held = [
+      { ...message(1, local(7, 10)), hasInvite: true },
+      { ...message(2, local(7, 10, 5)), bulk: true, automatic: true },
+      message(3, local(7, 10, 10))
+    ]
+    const t = setup({ deliveredUntil: local(7, 9).toISOString(), held })
+    await t.d.deliverNow(local(7, 11))
+    const byUid = new Map(t.delivery().records[0]!.items.map((i) => [i.uid, i]))
+    expect(byUid.get(1)!.hasInvite).toBe(true)
+    expect(byUid.get(2)).toMatchObject({ bulk: true, automatic: true })
+    expect(Object.keys(byUid.get(3)!)).not.toContain('hasInvite')
+  })
+
   it('records a missed time on the first look after starting, without announcing it', async () => {
     const t = setup({ deliveredUntil: local(6, 17).toISOString(), held: [message(1, local(7, 8))] })
     await t.d.tick(local(7, 9, 2))

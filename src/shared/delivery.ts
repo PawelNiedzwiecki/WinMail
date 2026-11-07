@@ -81,6 +81,11 @@ export function advance(deliveredUntil: string | null, now: Date, times: string[
   return { deliveredUntil: last.toISOString(), crossed: last }
 }
 
+/** "09:00": a moment's local time of day, UK style. */
+export function hhmm(at: Date | string): string {
+  return new Date(at).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })
+}
+
 /** Whether two times fall on the same local calendar day. */
 export function sameDay(a: Date, b: Date): boolean {
   return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate()

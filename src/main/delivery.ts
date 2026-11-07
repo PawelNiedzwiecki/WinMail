@@ -10,13 +10,16 @@ const MAX_ITEMS = 200
 /** A Delivery time noticed this long after it passed (the PC slept, WinMail was closed) is a catch-up, not announced. */
 const ON_TIME_MS = 5 * 60_000
 
+/** A delivered message as the mail service lists it, with what the Brief reads from its headers and structure. */
+export type DeliveredMessage = MessageSummary & Pick<DeliveredItem, 'hasInvite' | 'bulk' | 'automatic'>
+
 /** What Deliveries needs from the mail service. */
 export interface DeliveryMail {
   /** Unread Inbox messages of an account that arrived after `after` and up to `until`, not from a VIP or the user. */
-  heldBetween(accountId: string, after: string, until: string, rule: HoldRule): Promise<MessageSummary[]>
+  heldBetween(accountId: string, after: string, until: string, rule: HoldRule): Promise<DeliveredMessage[]>
 }
 
-function toItem(m: MessageSummary): DeliveredItem {
+function toItem(m: DeliveredMessage): DeliveredItem {
   return {
     accountId: m.accountId,
     mailbox: m.mailbox,
@@ -31,7 +34,10 @@ function toItem(m: MessageSummary): DeliveredItem {
     arrivedAt: m.arrivedAt ?? m.date,
     category: m.category,
     flagged: m.flagged,
-    hasAttachments: m.hasAttachments
+    hasAttachments: m.hasAttachments,
+    ...(m.hasInvite ? { hasInvite: true } : {}),
+    ...(m.bulk ? { bulk: true } : {}),
+    ...(m.automatic ? { automatic: true } : {})
   }
 }
 
@@ -161,7 +167,7 @@ export class Deliveries {
     this.store.setDelivery({ ...this.saved(), deliveredUntil: to })
     this.changed()
     const rule = this.rule(at)
-    const found: MessageSummary[] = []
+    const found: DeliveredMessage[] = []
     if (rule) {
       for (const a of this.store.listAccounts().filter((x) => x.enabled)) {
         try {

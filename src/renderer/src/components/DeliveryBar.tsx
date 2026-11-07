@@ -1,14 +1,14 @@
 import { Clock } from 'lucide-react'
 import { useState } from 'react'
 import type { DeliveryState } from '@shared/types'
-import { sameDay } from '@shared/delivery'
+import { hhmm, sameDay } from '@shared/delivery'
 
 interface Props {
   state: DeliveryState
   onDeliverNow: () => Promise<void>
+  /** The Brief is shown below, and says when the last Delivery was. */
+  briefShown?: boolean
 }
-
-const hhmm = (d: Date) => d.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })
 
 /** "13:00", "tomorrow at 09:00", or a weekday for anything further off. */
 function when(iso: string, now = new Date()): string {
@@ -23,10 +23,10 @@ function when(iso: string, now = new Date()): string {
  * Above the Inbox while Batched delivery is on: when the next Delivery is, and Deliver Now. It never says how much is
  * held, so there is nothing to check on between Deliveries.
  */
-export function DeliveryBar({ state, onDeliverNow }: Props) {
+export function DeliveryBar({ state, onDeliverNow, briefShown }: Props) {
   const [busy, setBusy] = useState(false)
   if (!state.nextAt) return null
-  const last = state.last && sameDay(new Date(state.last.at), new Date()) ? state.last : null
+  const last = !briefShown && state.last && sameDay(new Date(state.last.at), new Date()) ? state.last : null
   return (
     <div className="delivery-bar" role="status">
       <Clock size={13} className="delivery-bar-icon" aria-hidden />

@@ -31,6 +31,8 @@ import {
   type AccountLabels,
   type Address,
   type Contact,
+  type DeliveredItem,
+  type DeliveryRecord,
   type DeliveryState,
   type GmailCategory,
   type LabelChange,
@@ -89,6 +91,8 @@ import { SourceDialog } from './components/SourceDialog'
 import { ScheduledDialog } from './components/ScheduledDialog'
 import { WaitingDialog, startFollowUp } from './components/WaitingDialog'
 import { DeliveryBar } from './components/DeliveryBar'
+import { BriefCard, type BriefParagraph } from './components/BriefCard'
+import { makeBrief } from '@shared/brief'
 import { formatWhen } from './compose/schedule'
 import { groupThreads, type Thread } from './threads'
 import { applyReduceMotion, dur, ease } from './motion'
@@ -185,6 +189,16 @@ function dropHeld(list: MessageSummary[], boxes: Record<string, MailboxInfo[]>):
   const rule = holdRule()
   if (!rule) return list
   return list.filter((m) => !(m.mailbox === inboxPath(boxes[m.accountId]) && isHeld(m, rule)))
+}
+
+/** The Brief the user dismissed (its Delivery record's id); kept on this PC, so it stays dismissed after a restart. */
+const BRIEF_DISMISSED_KEY = 'winmail.briefDismissed'
+function dismissedBrief(): string | null {
+  try {
+    return localStorage.getItem(BRIEF_DISMISSED_KEY)
+  } catch {
+    return null
+  }
 }
 
 /** A folder's UIDs were renumbered: nothing remembered about its messages can be trusted. */
@@ -347,6 +361,13 @@ export default function App() {
   const [waiting, setWaiting] = useState<WaitingInfo[]>([])
   /** Batched delivery: whether it is on and when the next Delivery is. */
   const [delivery, setDelivery] = useState<DeliveryState | null>(null)
+  /** Saved Deliveries, newest first; the newest gives the Brief. */
+  const [deliveries, setDeliveries] = useState<DeliveryRecord[]>([])
+  const [briefDismissed, setBriefDismissed] = useState<string | null>(dismissedBrief)
+  /** The Claude paragraph of each Brief, by Delivery record id. */
+  const [briefTexts, setBriefTexts] = useState<Record<string, BriefParagraph>>({})
+  /** Bumped by "Try again" on a failed Claude paragraph. */
+  const [briefRetry, setBriefRetry] = useState(0)
   /** Messages of the open Gmail conversation from other folders, e.g. your replies in Sent. */
   const [threadExtra, setThreadExtra] = useState<{ key: string; list: MessageSummary[] } | null>(null)
   const [aiSummary, setAiSummary] = useState<AiSummaryState | null>(null)
@@ -595,6 +616,7 @@ export default function App() {
       hold.own = list.map((a) => a.email.trim().toLowerCase())
       setDelivery(d)
       setSettings(s)
+      if (d?.on) api.listDeliveries().then(setDeliveries, () => {})
       // Folders and unread counts saved on this PC show before any server answers; a failure here changes nothing.
       const saved = await Promise.all(
         list.filter((a) => a.enabled).map(async (a) => [a.id, await api.cachedMailboxes(a.id).catch(() => null)] as const)
@@ -711,7 +733,8 @@ export default function App() {
     if (key && messages.some((m) => m.key === key)) {
       pendingOpen.current = null
       setChecked(new Set())
-      setSelectedKey(key)
+      // In a conversation, its row is the newest message's.
+      setSelectedKey(threads.get(key)?.latest.key ?? key)
     }
   }, [messages])
 
@@ -820,6 +843,7 @@ export default function App() {
           setDelivery(d)
           void refresh(true)
         }, showError)
+        api.listDeliveries().then(setDeliveries, () => {})
       }),
     [refresh]
   )
@@ -828,11 +852,87 @@ export default function App() {
       const d = await api.deliverNow()
       hold.state = d
       setDelivery(d)
+      api.listDeliveries().then(setDeliveries, () => {})
       await refresh(true)
     } catch (e) {
       showError(e)
     }
   }
+
+  /**
+   * The Brief of the newest Delivery, while batching and the Brief are on, until it is dismissed or the next Delivery
+   * comes. A Delivery that brought nothing has no Brief, and replaces the one before.
+   */
+  const brief = useMemo(() => {
+    const r = deliveries[0]
+    if (!delivery?.on || !settings.brief || !r || !r.items.length || r.id === briefDismissed) return null
+    return makeBrief(
+      r,
+      { own: accounts.map((a) => a.email), vips: settings.vips, waitingIds: waiting.map((w) => w.messageId) },
+      { records: deliveries, waiting }
+    )
+  }, [deliveries, delivery?.on, settings.brief, settings.vips, briefDismissed, accounts, waiting])
+  const dismissBrief = (id: string) => {
+    setBriefDismissed(id)
+    try {
+      localStorage.setItem(BRIEF_DISMISSED_KEY, id)
+    } catch {
+      // Not saved: it stays dismissed until WinMail restarts.
+    }
+  }
+
+  // The Brief's Claude paragraph, only with the Brief Content opt-in on and a key saved. The local Brief shows at once
+  // and never waits for it; the main process refuses it too while the opt-in is off.
+  const briefId = brief?.recordId ?? null
+  const briefAi = optedIn(settings, 'brief')
+  useEffect(() => {
+    if (!briefId || !briefAi) return
+    // A failed one is asked again when the opt-in is turned back on or the user tries again.
+    const st = briefTexts[briefId]
+    if (st && (st.state === 'loading' || st.state === 'done')) return
+    let live = true
+    void api.aiAvailable().then((ok) => {
+      if (!live || !ok) return
+      setBriefTexts((m) => ({ ...m, [briefId]: { state: 'loading' } }))
+      api.briefSummary(briefId).then(
+        (text) => setBriefTexts((m) => ({ ...m, [briefId]: { state: 'done', text } })),
+        (e) => setBriefTexts((m) => ({ ...m, [briefId]: { state: 'error', error: e instanceof Error ? e.message : String(e) } }))
+      )
+    })
+    return () => {
+      live = false
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [briefId, briefAi, briefRetry])
+  const briefParagraph: BriefParagraph = (briefAi && briefId && briefTexts[briefId]) || { state: 'off' }
+
+  /** Opens a message from the Brief: selected in the list when it is there, otherwise in its own Inbox. */
+  const openDelivered = (item: DeliveredItem) => {
+    const key = `${item.accountId}|${item.mailbox}|${item.uid}`
+    if (messages.some((m) => m.key === key)) {
+      setChecked(new Set())
+      // In a conversation, its row is the newest message's.
+      setSelectedKey(threads.get(key)?.latest.key ?? key)
+      return
+    }
+    pendingOpen.current = key
+    // A category tab may leave it out: show them all.
+    if (category) setCategory(null)
+    if (selection.kind === 'all-inboxes' || (selection.kind === 'mailbox' && selection.accountId === item.accountId && selection.path === item.mailbox)) {
+      void refresh(true)
+    } else select({ kind: 'mailbox', accountId: item.accountId, path: item.mailbox })
+  }
+
+  // The Morning brief notification was clicked: All Inboxes, where the Brief is.
+  useEffect(
+    () =>
+      api.onShowBrief(() => {
+        setQuery('')
+        if (latest.current.selection.kind !== 'all-inboxes') select({ kind: 'all-inboxes' })
+      }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    []
+  )
 
   /** Adds someone to the VIPs, whose mail is never held, or takes them off. */
   const toggleVip = (who: Address) => {
@@ -1861,7 +1961,18 @@ export default function App() {
                 ) : (
                   <>
                     {inboxView && delivery?.on && !searchResults && (
-                      <DeliveryBar state={delivery} onDeliverNow={deliverNow} />
+                      <DeliveryBar state={delivery} onDeliverNow={deliverNow} briefShown={!!brief} />
+                    )}
+                    {inboxView && brief && !searchResults && (
+                      <BriefCard
+                        key={brief.recordId}
+                        brief={brief}
+                        paragraph={briefParagraph}
+                        onOpen={openDelivered}
+                        onOpenWaiting={(w) => setDialog({ kind: 'waiting', focusId: w.id })}
+                        onRetry={() => setBriefRetry((n) => n + 1)}
+                        onDismiss={() => dismissBrief(brief.recordId)}
+                      />
                     )}
                     {categoryTabs}
                   </>

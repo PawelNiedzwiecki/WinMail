@@ -140,7 +140,7 @@ While batching is on, a thin strip sits above the Inbox and All Inboxes list: **
 - [x] Checked in mock mode with Playwright: held mail hidden and left out of the counts, Deliver Now, a scheduled Delivery, search still finding held mail, adding a VIP showing their held mail, VIP menu items, turning off and on, Mark All as Read leaving held mail unread, light, dark, 900 × 560
 - [x] PR review fixes: future-dated mail shows, Deliver Now waits for a running Delivery and lists everything since the saved point, the held count is refreshed when HIGHESTMODSEQ changes or after 2 minutes, the 500-message limit is logged
 - [ ] Real accounts: the held count and Inbox list on Gmail and an IMAP server, a Delivery notification on Windows, Mark All as Read with held mail
-- [ ] Part 2: the Brief and the Morning brief
+- [x] Part 2: the Brief and the Morning brief (see its status below)
 
 ## Part 2: the Brief and the Morning brief (separate session)
 
@@ -185,4 +185,24 @@ The Brief of the day's `first` Delivery. It adds:
 ### Left for Part 2's session
 
 - No Brief when batching is off (decided). With batching off, Part 2 adds nothing to the Inbox.
-- The exact layout of the Brief card at narrow widths (900 px window).
+- The exact layout of the Brief card at narrow widths (900 px window). Settled: the card sits under the strip; its body scrolls past about a third of the window (at most 300 px), "Needs you" shows four rows before "Show N more", and long subjects are cut with an ellipsis before the reason.
+
+### How Part 2 was built (2026-11-07)
+
+Choices made while building, within the decisions above:
+
+- **"From a person"** also leaves out bulk mail (List-Id, List-Unsubscribe, Precedence) and Updates, unless an Updates message answers something. Otherwise a bank statement or receipt sent straight to the user would be "Needs you" for being in To.
+- **"Replied to you"** checks the Waiting for list and, more reliably, the Message-IDs WinMail gives mail it sends, which now start `<winmail.` (a bare UUID at the user's domain was not enough: Apple Mail and Thunderbird use those for anyone at icloud.com or gmail.com). A held reply usually ends its wait when it is first fetched, before the Delivery, so the Waiting for list alone would often miss it.
+- **New record fields** (`hasInvite`, `bulk`, `automatic`) come from the FETCH `heldBetween` already makes, with no extra request. Records saved before Part 2 lack them and are sorted by sender and category alone.
+- **The overnight count** is the Morning brief's own count, since its record covers everything since the previous Delivery. So the line says "All 12 came overnight, since 17:00 yesterday" rather than repeating the number as news.
+- **The Morning brief notification** replaces the plain Delivery notification for a scheduled first Delivery. Catch-up Deliveries (WinMail started after 09:00) still announce nothing, as Part 1 decided. It shows only counts, so the preview setting doesn't change it.
+- **The Claude paragraph** is requested by the window for the newest record only, with the opt-in on and a key saved. The main process builds the text from the saved record, so the window can't widen what is sent. It is kept in memory per record.
+- **Dismissed** is the dismissed record's id in the window's localStorage.
+
+### Part 2 status (2026-11-07)
+
+- [x] `shared/brief.ts` and its tests (19), a record-fields case in `main/delivery.test.ts`
+- [x] `heldBetween` fields, the Brief Content opt-in enforced in `runAi`, `briefSummary`, the Morning brief notification and its click
+- [x] Window: the Brief card, opening messages from it, dismissing, the Claude paragraph, Settings > Delivery's Brief group, mocks (`?batch`, `?delivery`, `?morning`)
+- [x] Checked in mock mode with Playwright: light, dark, 900 × 560; rows, groups, dismiss and reload, Deliver Now, the opt-in off and on, the switches
+- [ ] Real accounts: invitations and bulk mail detected on Gmail and an IMAP server, "replied to you" on a real reply, the Morning brief notification on Windows (quiet hours, click)

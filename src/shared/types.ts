@@ -309,6 +309,12 @@ export interface DeliveredItem {
   category?: GmailCategory
   flagged: boolean
   hasAttachments: boolean
+  /** It carries a calendar invitation (a text/calendar part or an .ics file). Missing on records saved before. */
+  hasInvite?: boolean
+  /** Sent to a list or in bulk (List-Id, List-Unsubscribe or Precedence: bulk/list/junk). */
+  bulk?: boolean
+  /** Auto-Submitted, X-Autoreply or X-Autorespond: an automatic answer, not a person writing. */
+  automatic?: boolean
 }
 
 /** One Delivery: what it showed. Kept on this PC (the last 14) for the Brief. */
@@ -478,6 +484,10 @@ export interface Settings {
   deliveryTimes: string[]
   /** People whose mail is never held. */
   vips: Contact[]
+  /** Show the Brief at the top of the Inbox after a Delivery that brought mail (Batched delivery only). */
+  brief: boolean
+  /** Announce the Morning brief (the day's first Delivery) when WinMail is in the background. */
+  morningBriefNotify: boolean
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -507,7 +517,9 @@ export const DEFAULT_SETTINGS: Settings = {
   contentOptIns: NO_OPT_INS,
   batchDelivery: false,
   deliveryTimes: ['09:00', '13:00', '17:00'],
-  vips: []
+  vips: [],
+  brief: true,
+  morningBriefNotify: true
 }
 
 export interface TestResult {
@@ -647,6 +659,13 @@ export interface WinMailApi {
   listDeliveries(): Promise<DeliveryRecord[]>
   /** Batching was turned on or off, its times changed, or a Delivery happened: held mail may show now. */
   onDeliveryChanged(cb: () => void): () => void
+  /**
+   * The Brief's Claude-written paragraph for a Delivery record. Sends the sender, subject and preview of each message
+   * it delivered, so it is refused unless the Brief Content opt-in is on (ADR 0001).
+   */
+  briefSummary(recordId: string): Promise<string>
+  /** The Morning brief notification was clicked: show All Inboxes with the Brief. */
+  onShowBrief(cb: () => void): () => void
 
   /** Whether a Claude API key is saved. */
   aiAvailable(): Promise<boolean>
