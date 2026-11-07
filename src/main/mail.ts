@@ -776,13 +776,17 @@ export class MailService {
     const start = Date.parse(after)
     return rows
       .filter((r) => r.internalDate && new Date(r.internalDate).getTime() > start)
-      .map((r) => ({
-        uid: r.uid,
-        seen: r.flags?.has('\\Seen') ?? false,
-        from: toAddresses(r.envelope?.from)[0] ?? { name: '', email: '' },
-        date: new Date(r.envelope?.date ?? r.internalDate!).toISOString(),
-        arrivedAt: new Date(r.internalDate!).toISOString()
-      }))
+      .map((r) => {
+        // Holding goes by arrival; a malformed Date header must not stop the check.
+        const arrivedAt = new Date(r.internalDate!).toISOString()
+        return {
+          uid: r.uid,
+          seen: r.flags?.has('\\Seen') ?? false,
+          from: toAddresses(r.envelope?.from)[0] ?? { name: '', email: '' },
+          date: arrivedAt,
+          arrivedAt
+        }
+      })
   }
 
   /**

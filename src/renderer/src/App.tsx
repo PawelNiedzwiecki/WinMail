@@ -19,6 +19,8 @@ import {
   Tag,
   Trash2,
   User,
+  UserMinus,
+  UserPlus,
   Users
 } from 'lucide-react'
 import { AnimatePresence, motion } from 'motion/react'
@@ -27,6 +29,9 @@ import {
   DEFAULT_SETTINGS,
   type Account,
   type AccountLabels,
+  type Address,
+  type Contact,
+  type DeliveryState,
   type GmailCategory,
   type LabelChange,
   type LabelInfo,
@@ -44,6 +49,7 @@ import {
 } from '@shared/types'
 import { optedIn } from '@shared/contentFeatures'
 import { categorize } from '@shared/categorize'
+import { advance, isHeld, isVip, vipAddresses, type HoldRule } from '@shared/delivery'
 import { api } from './api'
 import { Sidebar, inboxPath, type Selection } from './components/Sidebar'
 import { MessageList } from './components/MessageList'
@@ -82,6 +88,7 @@ import { ConfirmDeleteDialog } from './components/ConfirmDeleteDialog'
 import { SourceDialog } from './components/SourceDialog'
 import { ScheduledDialog } from './components/ScheduledDialog'
 import { WaitingDialog, startFollowUp } from './components/WaitingDialog'
+import { DeliveryBar } from './components/DeliveryBar'
 import { formatWhen } from './compose/schedule'
 import { groupThreads, type Thread } from './threads'
 import { applyReduceMotion, dur, ease } from './motion'
@@ -153,6 +160,31 @@ async function cachedBox(
   } catch {
     return null
   }
+}
+
+/**
+ * Batched delivery as the window last heard it, with the VIPs and the user's own addresses. Kept outside React so the
+ * list loaders, which run from timers and events, read the current one.
+ */
+const hold: { state: DeliveryState | null; vips: Contact[]; own: string[] } = { state: null, vips: [], own: [] }
+
+/** What holds Inbox mail right now, the same rule the main process counts with; null while batching is off. */
+function holdRule(): HoldRule | null {
+  const st = hold.state
+  if (!st?.on || !st.deliveredUntil) return null
+  return {
+    // A Delivery time that has just passed counts at once, before the main process says so.
+    deliveredUntil: advance(st.deliveredUntil, new Date(), st.times).deliveredUntil,
+    vips: vipAddresses(hold.vips),
+    own: hold.own
+  }
+}
+
+/** Inbox rows without the mail held until the next Delivery. Other folders are left alone. */
+function dropHeld(list: MessageSummary[], boxes: Record<string, MailboxInfo[]>): MessageSummary[] {
+  const rule = holdRule()
+  if (!rule) return list
+  return list.filter((m) => !(m.mailbox === inboxPath(boxes[m.accountId]) && isHeld(m, rule)))
 }
 
 /** A folder's UIDs were renumbered: nothing remembered about its messages can be trusted. */
@@ -313,6 +345,8 @@ export default function App() {
   const [scheduled, setScheduled] = useState<ScheduledInfo[]>([])
   /** Sent messages waiting for a reply (Waiting for). */
   const [waiting, setWaiting] = useState<WaitingInfo[]>([])
+  /** Batched delivery: whether it is on and when the next Delivery is. */
+  const [delivery, setDelivery] = useState<DeliveryState | null>(null)
   /** Messages of the open Gmail conversation from other folders, e.g. your replies in Sent. */
   const [threadExtra, setThreadExtra] = useState<{ key: string; list: MessageSummary[] } | null>(null)
   const [aiSummary, setAiSummary] = useState<AiSummaryState | null>(null)
@@ -322,6 +356,8 @@ export default function App() {
   const pendingOpen = useRef<string | null>(null)
 
   const enabled = useMemo(() => accounts.filter((a) => a.enabled), [accounts])
+  hold.vips = settings.vips
+  hold.own = accounts.map((a) => a.email.trim().toLowerCase())
   const accountById = useMemo(() => Object.fromEntries(accounts.map((a) => [a.id, a])), [accounts])
 
   // ---------- Loading ----------
@@ -366,7 +402,8 @@ export default function App() {
     async (sel: Selection, list: Account[], boxes: Record<string, MailboxInfo[]>, max: number, cat: GmailCategory | null) => {
       if (sel.kind === 'mailbox') {
         const got = await cachedBox(list.find((a) => a.id === sel.accountId), sel.path, max, cat, sel.accountId)
-        return got && { result: got.items, more: got.raw >= max, byAccount: { [sel.accountId]: got.items } }
+        const items = got && dropHeld(got.items, boxes)
+        return got && items && { result: items, more: got.raw >= max, byAccount: { [sel.accountId]: items } }
       }
       // A label view is a search across folders; nothing of it is saved.
       if (sel.kind === 'label') return null
@@ -374,9 +411,9 @@ export default function App() {
       const got = await Promise.all(targets.map((a) => cachedBox(a, inboxPath(boxes[a.id]), max, cat)))
       if (!targets.length || got.some((g) => !g)) return null
       const byAccount: Record<string, MessageSummary[]> = {}
-      targets.forEach((a, i) => (byAccount[a.id] = got[i]!.items))
+      targets.forEach((a, i) => (byAccount[a.id] = dropHeld(got[i]!.items, boxes)))
       return {
-        result: got.flatMap((g) => g!.items).sort((a, b) => b.date.localeCompare(a.date)),
+        result: Object.values(byAccount).flat().sort((a, b) => b.date.localeCompare(a.date)),
         more: got.some((g) => g!.raw >= max),
         byAccount
       }
@@ -440,13 +477,14 @@ export default function App() {
             const inbox = inboxPath(boxes[a.id])
             return painted?.[a.id] ?? latest.current.messages.filter((m) => m.accountId === a.id && m.mailbox === inbox)
           })
+          result = dropHeld(result, boxes)
           result.sort((a, b) => b.date.localeCompare(a.date))
         } else if (sel.kind === 'label') {
           result = await api.searchQuery(sel.accountId, inboxPath(boxes[sel.accountId]), labelQuery(sel.id), max)
           more = result.length >= max
         } else {
           const got = await fetchBox(list.find((a) => a.id === sel.accountId), sel.path, max, cat, sel.accountId)
-          result = got.items
+          result = dropHeld(got.items, boxes)
           more = got.raw >= max
         }
         if (req !== listReq.current) return
@@ -550,7 +588,12 @@ export default function App() {
   // Initial load
   useEffect(() => {
     ;(async () => {
-      const [list, s] = await Promise.all([loadAccounts(), api.getSettings()])
+      const [list, s, d] = await Promise.all([loadAccounts(), api.getSettings(), api.getDelivery().catch(() => null)])
+      // Held mail must be known before the first list is shown, or it would flash up and go.
+      hold.state = d
+      hold.vips = s.vips
+      hold.own = list.map((a) => a.email.trim().toLowerCase())
+      setDelivery(d)
       setSettings(s)
       // Folders and unread counts saved on this PC show before any server answers; a failure here changes nothing.
       const saved = await Promise.all(
@@ -766,6 +809,48 @@ export default function App() {
       setAsking(false)
       setAiSearch(null)
     }
+  }
+
+  // Batched delivery: a Delivery, Deliver Now, or new times or VIPs change which Inbox mail shows, and the counts.
+  useEffect(
+    () =>
+      api.onDeliveryChanged(() => {
+        void api.getDelivery().then((d) => {
+          hold.state = d
+          setDelivery(d)
+          void refresh(true)
+        }, showError)
+      }),
+    [refresh]
+  )
+  const deliverNow = async () => {
+    try {
+      const d = await api.deliverNow()
+      hold.state = d
+      setDelivery(d)
+      await refresh(true)
+    } catch (e) {
+      showError(e)
+    }
+  }
+
+  /** Adds someone to the VIPs, whose mail is never held, or takes them off. */
+  const toggleVip = (who: Address) => {
+    const name = who.name || who.email
+    const vip = isVip(who.email, settings.vips)
+    const vips = vip
+      ? settings.vips.filter((v) => v.email.trim().toLowerCase() !== who.email.trim().toLowerCase())
+      : [...settings.vips, { name: who.name, email: who.email }]
+    void updateSettings({ ...settings, vips })
+    toast(vip ? `${name} is no longer a VIP` : `${name} is a VIP: their mail comes through at once`)
+  }
+  /** "Add Jamie to VIPs" for a message from someone else, while batching is on. */
+  const vipItem = (m: MessageSummary | null | undefined): MenuItem[] => {
+    if (!m || !settings.batchDelivery || !m.from.email || hold.own.includes(m.from.email.trim().toLowerCase())) return []
+    const first = (m.from.name || m.from.email).split(/\s+/)[0]!
+    return isVip(m.from.email, settings.vips)
+      ? [{ label: `Remove ${first} from VIPs`, icon: <UserMinus size={14} />, onSelect: () => toggleVip(m.from) }]
+      : [{ label: `Add ${first} to VIPs`, icon: <UserPlus size={14} />, onSelect: () => toggleVip(m.from) }]
   }
 
   // Periodic check
@@ -1391,7 +1476,8 @@ export default function App() {
     ...(selected && labelSupport(selected.accountId) !== 'none'
       ? [{ label: 'Labels…', icon: <Tag size={14} />, shortcut: settings.gmailShortcuts ? 'L' : undefined, onSelect: () => askLabels() }]
       : []),
-    { label: 'Snooze…', icon: <AlarmClock size={14} />, shortcut: settings.gmailShortcuts ? 'B' : undefined, onSelect: () => askSnooze() }
+    { label: 'Snooze…', icon: <AlarmClock size={14} />, shortcut: settings.gmailShortcuts ? 'B' : undefined, onSelect: () => askSnooze() },
+    ...vipItem(selected)
   ]
 
   const accountsChanged = async () => {
@@ -1464,7 +1550,8 @@ export default function App() {
         : []),
       { label: 'Snooze…', icon: <AlarmClock size={14} />, onSelect: () => askSnooze(items) },
       { label: 'Move to Junk', icon: <ShieldAlert size={14} />, onSelect: () => moveMessages(items, 'junk') },
-      { label: 'Delete', icon: <Trash2 size={14} />, shortcut: 'Del', danger: true, onSelect: () => askTrash(items) }
+      { label: 'Delete', icon: <Trash2 size={14} />, shortcut: 'Del', danger: true, onSelect: () => askTrash(items) },
+      ...(single && vipItem(m).length ? (['separator', ...vipItem(m)] as MenuItem[]) : [])
     ]
   }
   const menuMessage = menu ? visible.find((m) => m.key === menu.key) : undefined
@@ -1667,9 +1754,8 @@ export default function App() {
       : undefined
 
   const box = src(selection)
-  const showCategories =
-    settings.inboxCategories &&
-    (selection.kind === 'all-inboxes' || (selection.kind === 'mailbox' && box?.specialUse === 'inbox'))
+  const inboxView = selection.kind === 'all-inboxes' || (selection.kind === 'mailbox' && box?.specialUse === 'inbox')
+  const showCategories = settings.inboxCategories && inboxView
   // The chosen tab widens to show its name; the tinted pill slides over from the previous one.
   const categoryTabs = showCategories ? (
     <div className="cat-tabs" role="tablist" aria-label="Inbox categories">
@@ -1773,7 +1859,12 @@ export default function App() {
                     }}
                   />
                 ) : (
-                  categoryTabs
+                  <>
+                    {inboxView && delivery?.on && !searchResults && (
+                      <DeliveryBar state={delivery} onDeliverNow={deliverNow} />
+                    )}
+                    {categoryTabs}
+                  </>
                 )
               }
               view={listView}

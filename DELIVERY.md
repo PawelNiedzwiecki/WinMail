@@ -72,7 +72,7 @@ interface DeliveredItem {           // a held message that was delivered
 }
 interface DeliveryRecord {
   id: string
-  at: string                        // ISO: the Delivery time (scheduled), or when it happened (catch-up, now)
+  at: string                        // ISO: the Delivery time it stands for (scheduled, catch-up), or the Deliver Now press
   kind: 'scheduled' | 'catch-up' | 'now'
   first: boolean                    // first Delivery of its local day: its Brief is the Morning brief
   items: DeliveredItem[]            // at most 200, newest first
@@ -89,7 +89,7 @@ While batching is on, a thin strip sits above the Inbox and All Inboxes list: **
 ### VIPs
 
 - One list of people (name and email, matched on the address in lower case) across all accounts, stored in `Settings.vips`. Their mail is never held.
-- Added in **Settings > Delivery**: type a name or address (autocomplete from contacts), or pick from **Suggested**: up to 5 people the user writes to most (from the contacts the user has sent mail to, sent-weighted, lists and no-reply addresses left out) who are not VIPs yet.
+- Added in **Settings > Delivery**: type a name or address (autocomplete from contacts), or pick from **Suggested**: the first 5 people in the accounts' contacts (saved contacts first, then people the user writes to, then people who write; taken from each account in turn; lists and the user's own addresses left out) who are not VIPs yet. A ranking by sent mail alone would need a new main-process method; this uses the existing `listContacts` order.
 - Also from a message: **Add Jane to VIPs** / **Remove Jane from VIPs** in the message's right-click menu and the reading pane's More menu.
 
 ### Other behaviour
@@ -98,6 +98,7 @@ While batching is on, a thin strip sits above the Inbox and All Inboxes list: **
 - **Replies you're Waiting for** are held like any other mail. The wait still ends as soon as the reply is fetched, because reply detection reads every fetched message whether or not it's shown, so you get no nudge for it.
 - **New mail while the window is focused** that is held: nothing shows, as intended.
 - **Opening a held message by other means** (search, a message window) works as normal. It is read, so it is no longer held.
+- **A Gmail conversation that is opened** shows all its messages, from All Mail, including a held reply. Opening a conversation is asking for it.
 
 ### Settings > Delivery (new page)
 
@@ -114,13 +115,13 @@ While batching is on, a thin strip sits above the Inbox and All Inboxes list: **
 | `shared/types.ts` | `Settings.batchDelivery` (false), `deliveryTimes`, `vips: Contact[]`; `MessageSummary.arrivedAt`; `MailboxInfo.held`; `DeliveryState`, `DeliveryRecord`, `DeliveredItem`; API methods below |
 | `main/store.ts` | `delivery: { deliveredUntil: string \| null; records: DeliveryRecord[] }`; records removed with the account; `setSettings` passes the change to `Deliveries` |
 | `main/delivery.ts` | `Deliveries`: `tick()`, `deliverNow()`, `settingsChanged(prev, next)`, `state()`, `records()`, `rule()`; builds records through `MailService.delivered(…)`; calls `Notifier.delivered(record)` for scheduled ones |
-| `main/mail.ts` | `arrivedAt` from INTERNALDATE in `fetchSummaries` and `getMessage`; `listMailboxes` and `cachedMailboxes` take held unread mail out of the Inbox's `unseen` and set `held` (one SEARCH plus a small FETCH on the Inbox, only when batching is on and the Inbox has unread mail, remembered by uidNext, unseen, deliveredUntil and the VIPs); `markAllRead` skips held UIDs; `heldSince(accountId, from, to)` for records |
+| `main/mail.ts` | `arrivedAt` from INTERNALDATE in `fetchSummaries` and `getMessage`; `holdBy(rule)`; `listMailboxes` and `cachedMailboxes` take held unread mail out of the Inbox's `unseen` and set `held` (one SEARCH plus a small FETCH on the Inbox, only when batching is on and the Inbox has unread mail, remembered by UIDVALIDITY, UIDNEXT, unseen, deliveredUntil and the VIPs; offline, from the saved Inbox rows); `markAllRead` skips held UIDs; `heldBetween(accountId, after, until, rule)` for records |
 | `main/notifications.ts` | `announce` drops held messages; new `delivered(record)` |
 | `main/index.ts`, `ipc.ts`, `preload` | wiring; `delivery:state`, `delivery:now`, `delivery:list`, event `delivery:changed` |
 | Renderer | `App.tsx` filters Inbox rows with `isHeld` (rule from `getDelivery()`) and refreshes on `delivery:changed`; `components/DeliveryBar.tsx`; `components/settings/DeliveryPage.tsx`; VIP items in the context and More menus |
-| `mockApi.ts` | batching state, records, Deliver Now; `?batch` starts with batching on and three held messages; `?delivery` makes a Delivery happen 4 s after launch |
+| `mockApi.ts` | batching state, records, Deliver Now; `?batch` starts with batching on (the last Delivery a few minutes ago, the next in three hours) and three held messages; `?delivery` also makes a scheduled Delivery 4 s after launch |
 
-**New API:** `getDelivery(): DeliveryState` (`{ on, times, deliveredUntil, nextAt, lastAt }`), `deliverNow()`, `listDeliveries(): DeliveryRecord[]`, `onDeliveryChanged(cb)`.
+**New API:** `getDelivery(): DeliveryState` (`{ on, times, deliveredUntil, nextAt, last }`), `deliverNow()`, `listDeliveries(): DeliveryRecord[]`, `onDeliveryChanged(cb)`.
 
 **Tests:**
 - `shared/delivery.test.ts`: times across midnight, unsorted and duplicate input, the first and last Delivery of a day, both DST change days in Europe/London (with `TZ` set for the test run), `advance` never moving back, and `isHeld` for each rule (read, VIP, own address, before and after the boundary, missing `arrivedAt`).
@@ -129,6 +130,16 @@ While batching is on, a thin strip sits above the Inbox and All Inboxes list: **
 **Docs:** SPEC changelog, feature spec, IPC table, architecture and roadmap; README features; a **Held** entry in CONTEXT.md.
 
 **Not checkable here:** real IMAP servers' INTERNALDATE and `SEARCH SINCE`, and Windows notifications. Mock mode with Playwright covers the UI.
+
+### Status (2026-11-07)
+
+- [x] Plan agreed, with the four decisions above
+- [x] `shared/delivery.ts` and its tests (19), `main/delivery.ts` and its tests (13)
+- [x] Mail service, notifier, store, IPC, preload, mock API
+- [x] Window: held rows dropped from Inbox lists, the strip, Settings > Delivery, VIP menu items
+- [x] Checked in mock mode with Playwright: held mail hidden and left out of the counts, Deliver Now, a scheduled Delivery, search still finding held mail, adding a VIP showing their held mail, VIP menu items, turning off and on, Mark All as Read leaving held mail unread, light, dark, 900 × 560
+- [ ] Real accounts: the held count and Inbox list on Gmail and an IMAP server, a Delivery notification on Windows, Mark All as Read with held mail
+- [ ] Part 2: the Brief and the Morning brief
 
 ## Part 2: the Brief and the Morning brief (separate session)
 
