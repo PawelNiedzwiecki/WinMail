@@ -280,6 +280,85 @@
   min-width: 92px;
 }
 
+/* ---------- Delivery ---------- */
+.dl-time {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.st-item-control .dl-time .select {
+  min-width: 92px;
+}
+.dl-time .tb-btn:disabled {
+  opacity: 0.35;
+}
+.dl-plus {
+  margin: -2px 4px 0 -4px;
+  vertical-align: middle;
+}
+.dl-vips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.dl-empty {
+  color: var(--text-3);
+}
+.dl-vip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  height: 26px;
+  padding: 0 4px 0 10px;
+  border-radius: 13px;
+  background: var(--control-bg);
+  box-shadow: 0 0 0 0.5px var(--control-border);
+  font-size: 12px;
+}
+.dl-vip-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dl-vip-email {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-3);
+}
+.dl-vip-remove {
+  flex: none;
+  width: 18px;
+  height: 18px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  color: var(--text-3);
+}
+.dl-vip-remove:hover {
+  background: var(--hover);
+  color: var(--text);
+}
+.dl-suggest {
+  padding: 0 10px 0 8px;
+  color: var(--accent);
+}
+.dl-suggest .dl-vip-name {
+  color: var(--text);
+}
+.dl-suggest:hover {
+  background: color-mix(in srgb, var(--accent) 8%, var(--control-bg));
+}
+.dl-add {
+  margin-top: 10px;
+}
+.dl-error {
+  margin-top: 6px;
+  color: var(--danger);
+  font-size: 12px;
+}
+
 /* ---------- Shortcuts ---------- */
 .st-keyrow {
   min-height: 40px;

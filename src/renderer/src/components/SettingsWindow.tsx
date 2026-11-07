@@ -3,6 +3,7 @@ import {
   Bell,
   ChevronLeft,
   ChevronRight,
+  Clock,
   Keyboard,
   Monitor,
   Moon,
@@ -30,8 +31,18 @@ import { Select } from './Select'
 import { Group, Item, KeyRow, Segmented, Switch } from './settings/controls'
 import { NotificationsPage } from './settings/NotificationsPage'
 import { LabelsPage } from './settings/LabelsPage'
+import { DeliveryPage } from './settings/DeliveryPage'
 
-export type SettingsTab = 'general' | 'appearance' | 'notifications' | 'composing' | 'labels' | 'shortcuts' | 'ai' | 'accounts'
+export type SettingsTab =
+  | 'general'
+  | 'appearance'
+  | 'notifications'
+  | 'delivery'
+  | 'composing'
+  | 'labels'
+  | 'shortcuts'
+  | 'ai'
+  | 'accounts'
 
 interface Props {
   tab: SettingsTab
@@ -50,6 +61,7 @@ const PAGES: { id: SettingsTab; label: string; icon: LucideIcon }[] = [
   { id: 'general', label: 'General', icon: SlidersHorizontal },
   { id: 'appearance', label: 'Appearance', icon: Palette },
   { id: 'notifications', label: 'Notifications', icon: Bell },
+  { id: 'delivery', label: 'Delivery', icon: Clock },
   { id: 'composing', label: 'Composing', icon: PenLine },
   { id: 'labels', label: 'Labels', icon: Tag },
   { id: 'shortcuts', label: 'Shortcuts', icon: Keyboard },
@@ -90,6 +102,7 @@ export function SettingsWindow(p: Props) {
             {page.id === 'notifications' && (
               <NotificationsPage settings={p.settings} accounts={p.accounts} onChange={p.onSettings} />
             )}
+            {page.id === 'delivery' && <DeliveryPage settings={p.settings} accounts={p.accounts} onChange={p.onSettings} />}
             {page.id === 'composing' && (
               <ComposingPage settings={p.settings} onChange={p.onSettings} onAccounts={() => p.onTab('accounts')} />
             )}

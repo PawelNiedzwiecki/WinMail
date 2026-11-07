@@ -20,6 +20,7 @@ import { cancelSignIn, revoke } from './google'
 import type { Contacts } from './contacts'
 import type { Outbox } from './outbox'
 import type { WaitingFor } from './waiting'
+import type { Deliveries } from './delivery'
 import { askSearch, runAi } from './ai'
 import { AttachmentGrants, TEMP_ROOT, saveTempFile } from './attachments'
 
@@ -66,7 +67,8 @@ export function registerIpc(
   contacts: Contacts,
   outbox: Outbox,
   cache: MailCache,
-  waiting: WaitingFor
+  waiting: WaitingFor,
+  deliveries: Deliveries
 ): void {
   const attachments = new AttachmentGrants([store.outboxDir, TEMP_ROOT])
 
@@ -107,8 +109,10 @@ export function registerIpc(
 
   handle('settings:get', () => store.getSettings())
   handle('settings:set', (s: Settings) => {
+    const before = store.getSettings()
     const saved = store.setSettings(s)
     nativeTheme.themeSource = saved.appearance
+    deliveries.settingsChanged(before, saved)
     return saved
   })
 
@@ -127,7 +131,7 @@ export function registerIpc(
   )
   handle('labels:delete', (id: string, label: string) => mail.deleteLabel(id, label))
   // Read from the copy on this PC; no connection is made.
-  handle('mail:cachedMailboxes', (id: string) => cache.mailboxes(id))
+  handle('mail:cachedMailboxes', (id: string) => mail.cachedMailboxes(id))
   handle('mail:cachedList', (id: string, path: string, limit: number, view?: string) => {
     if (view) {
       const rows = cache.view(id, path, view)
@@ -229,6 +233,10 @@ export function registerIpc(
     return waiting.longer(id, days)
   })
   handle('waiting:message', (id: string) => waiting.message(id))
+
+  handle('delivery:state', () => deliveries.state())
+  handle('delivery:now', () => deliveries.deliverNow())
+  handle('delivery:list', () => deliveries.records())
 
   handle('ai:available', () => store.hasAiKey())
   handle('ai:setKey', (key: string | null) => store.setAiKey(key?.trim() || null))

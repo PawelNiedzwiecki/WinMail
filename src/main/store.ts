@@ -8,6 +8,8 @@ import {
   type AccountInput,
   type AccountUpdate,
   type AuthMethod,
+  type Contact,
+  type DeliveryRecord,
   type LabelColour,
   type LabelSupport,
   type OutboxKind,
@@ -17,6 +19,7 @@ import {
   type WaitingInfo
 } from '../shared/types'
 import { normaliseOptIns } from '../shared/contentFeatures'
+import { normaliseTimes } from '../shared/delivery'
 
 /** A snoozed message, found again by Message-ID when it is due. */
 export interface Snoozed {
@@ -70,6 +73,16 @@ interface StoreFile {
   waiting: WaitingInfo[]
   /** accountId -> labels; kept apart from `settings` so a settings save from the renderer never overwrites them. */
   labels: Record<string, AccountLabelStore>
+  /** Batched delivery's own state; kept apart from `settings` for the same reason. */
+  delivery: DeliveryStore
+}
+
+/** What Batched delivery keeps between runs. */
+export interface DeliveryStore {
+  /** ISO time; Inbox mail that arrived after it is held. Only moves forward while batching is on; null while off. */
+  deliveredUntil: string | null
+  /** The last Deliveries, newest first. */
+  records: DeliveryRecord[]
 }
 
 const fresh = (): StoreFile => ({
@@ -80,12 +93,34 @@ const fresh = (): StoreFile => ({
   snoozed: [],
   scheduled: [],
   waiting: [],
-  labels: {}
+  labels: {},
+  delivery: { deliveredUntil: null, records: [] }
 })
+
+/** VIPs as saved: each address once, trimmed; anything without an address is dropped. */
+function normaliseVips(list: unknown): Contact[] {
+  if (!Array.isArray(list)) return []
+  const seen = new Set<string>()
+  const out: Contact[] = []
+  for (const v of list as Partial<Contact>[]) {
+    const email = typeof v?.email === 'string' ? v.email.trim() : ''
+    if (!email.includes('@') || seen.has(email.toLowerCase())) continue
+    seen.add(email.toLowerCase())
+    out.push({ name: typeof v.name === 'string' ? v.name.trim() : '', email })
+  }
+  return out
+}
 
 /** Saved settings over the defaults; Content opt-ins missing from an older file are off (ADR 0001). */
 function withDefaults(s: Partial<Settings> | undefined): Settings {
-  return { ...DEFAULT_SETTINGS, ...s, contentOptIns: normaliseOptIns(s?.contentOptIns) }
+  return {
+    ...DEFAULT_SETTINGS,
+    ...s,
+    contentOptIns: normaliseOptIns(s?.contentOptIns),
+    batchDelivery: s?.batchDelivery === true,
+    deliveryTimes: normaliseTimes(s?.deliveryTimes),
+    vips: normaliseVips(s?.vips)
+  }
 }
 
 export class Store {
@@ -123,7 +158,11 @@ export class Store {
       snoozed: raw.snoozed ?? [],
       scheduled: raw.scheduled ?? [],
       waiting: raw.waiting ?? [],
-      labels: raw.labels ?? {}
+      labels: raw.labels ?? {},
+      delivery: {
+        deliveredUntil: typeof raw.delivery?.deliveredUntil === 'string' ? raw.delivery.deliveredUntil : null,
+        records: Array.isArray(raw.delivery?.records) ? raw.delivery.records : []
+      }
     }
   }
 
@@ -183,6 +222,9 @@ export class Store {
     this.data.scheduled = this.data.scheduled.filter((x) => x.accountId !== id)
     this.data.waiting = this.data.waiting.filter((x) => x.accountId !== id)
     delete this.data.labels[id]
+    this.data.delivery.records = this.data.delivery.records
+      .map((r) => ({ ...r, items: r.items.filter((i) => i.accountId !== id) }))
+      .filter((r) => r.items.length || r.more)
     this.save()
   }
 
@@ -235,6 +277,17 @@ export class Store {
 
   setWaiting(list: WaitingInfo[]): void {
     this.data.waiting = list
+    this.save()
+  }
+
+  // ---------- Batched delivery ----------
+
+  getDelivery(): DeliveryStore {
+    return this.data.delivery
+  }
+
+  setDelivery(d: DeliveryStore): void {
+    this.data.delivery = d
     this.save()
   }
 

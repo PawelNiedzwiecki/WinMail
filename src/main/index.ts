@@ -19,6 +19,8 @@ import { Contacts } from './contacts'
 import { Outbox } from './outbox'
 import { Notifier } from './notifications'
 import { WaitingFor } from './waiting'
+import { Deliveries } from './delivery'
+import { isHeld } from '../shared/delivery'
 import { cleanTemp } from './attachments'
 import { loadWindowState, trackWindowState } from './windowState'
 import type { MessageSummary, OpenMessageEvent, WaitingInfo, WaitingOpenEvent } from '../shared/types'
@@ -411,6 +413,13 @@ if (!app.requestSingleInstanceLock()) {
     )
     mail = mailService
     const contacts = new Contacts(store, mailService, (id) => send('contacts:changed', id))
+    const deliveries = new Deliveries(
+      store,
+      mailService,
+      () => send('delivery:changed'),
+      (record) => notifier?.delivered(record)
+    )
+    mailService.holdBy(() => deliveries.rule())
     const waiting = new WaitingFor(
       store,
       mailService,
@@ -443,10 +452,12 @@ if (!app.requestSingleInstanceLock()) {
         } catch {
           // Already answered or stopped in the window.
         }
-      }
+      },
+      // Announced mail is all Inbox mail.
+      held: (m) => isHeld(m, deliveries.rule())
     })
     setMenu()
-    registerIpc(store, mailService, contacts, queue, mailCache, waiting)
+    registerIpc(store, mailService, contacts, queue, mailCache, waiting, deliveries)
     ipcMain.on('app:close-ready', (e) => {
       const w = BrowserWindow.fromWebContents(e.sender)
       if (!w) return
@@ -460,6 +471,7 @@ if (!app.requestSingleInstanceLock()) {
       void mailService.wakeSnoozed()
       void queue.sendDue()
       void waiting.check()
+      void deliveries.tick()
     }
     setTimeout(tick, CONTACTS_SCAN_DELAY_MS)
     setInterval(tick, TIMER_MS)
