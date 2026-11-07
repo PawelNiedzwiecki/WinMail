@@ -1,6 +1,15 @@
 import { BrowserWindow, ipcMain, nativeImage, Notification, type NativeImage } from 'electron'
 import { createHash } from 'crypto'
-import type { Account, Address, MailChangedEvent, MessageSummary, OpenMessageEvent, Settings } from '../shared/types'
+import type {
+  Account,
+  Address,
+  MailChangedEvent,
+  MessageSummary,
+  OpenMessageEvent,
+  Settings,
+  WaitingInfo,
+  WaitingOpenEvent
+} from '../shared/types'
 import { inQuietHours } from '../shared/quietHours'
 import { replySubject } from '../shared/subject'
 import type { Contacts } from './contacts'
@@ -28,6 +37,10 @@ interface Deps {
   window: () => BrowserWindow | null
   open: (e: OpenMessageEvent) => void
   changed: (e: MailChangedEvent) => void
+  /** Shows the Waiting for list in the main window, or starts a follow-up from it. */
+  showWaiting: (e: WaitingOpenEvent) => void
+  /** Stops waiting for a reply to one message (the nudge's Done button). */
+  stopWaiting: (id: string) => void
 }
 
 const SAMPLE: Omit<MessageSummary, 'accountId' | 'key'> = {
@@ -116,6 +129,47 @@ export class Notifier {
     if (!account) throw new Error('Add an account first.')
     const m: MessageSummary = { ...SAMPLE, accountId: account.id, key: `test|${Date.now()}`, date: new Date().toISOString() }
     await this.single(account, m, this.d.store.getSettings(), true)
+  }
+
+  /**
+   * Sent messages nobody answered in time (Waiting for). Shown only while WinMail is in the background; in the
+   * window the list and an in-app toast say it. Quiet hours and muted accounts apply, as for new mail.
+   */
+  nudge(items: WaitingInfo[]): void {
+    const s = this.d.store.getSettings()
+    if (inQuietHours(s) || !Notification.isSupported()) return
+    if (BrowserWindow.getAllWindows().some((w) => w.isFocused())) return
+    const list = items.filter((w) => !s.notifyMutedAccounts.includes(w.accountId))
+    if (!list.length) return
+    const hidden = s.notifyPreview === 'none'
+    if (list.length > 1) {
+      const n = new Notification({
+        id: tag('waiting|summary'),
+        title: `No reply to ${list.length} messages`,
+        body: hidden ? 'Open Waiting for to follow up.' : list.map((w) => w.subject || '(No Subject)').slice(0, 3).join('\n'),
+        silent: !s.notifySound
+      })
+      n.on('click', () => this.d.showWaiting({}))
+      this.show(n)
+      return
+    }
+    const w = list[0]!
+    const account = this.d.store.listAccounts().find((a) => a.id === w.accountId)
+    const sent = new Date(w.sentAt).toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' })
+    const n = new Notification({
+      id: tag(`waiting|${w.id}`),
+      title: 'No reply yet',
+      body: hidden ? (account?.description ?? 'Waiting for') : `${w.subject || '(No Subject)'}\nTo ${oneLine(w.to, 80)} · sent ${sent}`,
+      silent: !s.notifySound,
+      ...(account ? this.group(account) : {}),
+      actions: [
+        { type: 'button', text: 'Follow up' },
+        { type: 'button', text: 'Done' }
+      ]
+    })
+    n.on('click', () => this.d.showWaiting({ id: w.id }))
+    n.on('action', (e) => (e.actionIndex === 0 ? this.d.showWaiting({ id: w.id, followUp: true }) : this.d.stopWaiting(w.id)))
+    this.show(n)
   }
 
   private wanted(s: Settings, m: MessageSummary): boolean {

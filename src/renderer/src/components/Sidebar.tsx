@@ -14,6 +14,7 @@ import {
   Plus,
   TriangleAlert,
   Clock,
+  Hourglass,
   type LucideIcon
 } from 'lucide-react'
 import { useState, type ReactNode } from 'react'
@@ -52,6 +53,11 @@ interface Props {
   /** Messages waiting for Schedule send; the Scheduled entry shows while there are any. */
   scheduledCount: number
   onOpenScheduled: () => void
+  /** Sent messages waiting for a reply; the Waiting for entry shows while there are any. */
+  waitingCount: number
+  /** Those nobody answered in time; the entry's count. */
+  nudgedCount: number
+  onOpenWaiting: () => void
   /** Right-click on a mailbox. */
   onMailboxMenu: (accountId: string, path: string, x: number, y: number) => void
   /** accountId -> labels: Gmail label folders get their colour, keyword accounts a Labels list. */
@@ -139,6 +145,21 @@ export function Sidebar(p: Props) {
             <Collapse open={p.scheduledCount > 0}>
               <Item icon={Clock} label="Scheduled" count={p.scheduledCount} selected={false} onClick={p.onOpenScheduled} />
             </Collapse>
+            <Collapse open={p.waitingCount > 0}>
+              <Item
+                icon={Hourglass}
+                label="Waiting for"
+                count={p.nudgedCount}
+                tone={p.nudgedCount ? 'nudge' : undefined}
+                title={
+                  p.nudgedCount
+                    ? `${p.nudgedCount} with no reply yet, ${p.waitingCount} waiting in all`
+                    : `${p.waitingCount} sent ${p.waitingCount === 1 ? 'message' : 'messages'} waiting for a reply`
+                }
+                selected={false}
+                onClick={p.onOpenWaiting}
+              />
+            </Collapse>
           </Section>
         )}
 
@@ -208,6 +229,9 @@ function Item(props: {
   dot?: LabelColour
   label: string
   count?: number
+  /** Colours the count, e.g. nudges in Waiting for. */
+  tone?: 'nudge'
+  title?: string
   depth?: number
   selected: boolean
   onClick: () => void
@@ -219,6 +243,7 @@ function Item(props: {
     <button
       className={`sb-item ${props.selected ? 'is-selected' : ''}`}
       style={{ paddingLeft: 8 + (props.depth ?? 0) * 16 }}
+      title={props.title}
       onClick={props.onClick}
       onContextMenu={(e) => {
         if (!props.onContextMenu) return
@@ -236,7 +261,7 @@ function Item(props: {
       <span className="sb-label">{props.label}</span>
       {/* Keyed by the number so it ticks when new mail arrives or a message is read. */}
       {props.count ? (
-        <span key={props.count} className="sb-count">
+        <span key={props.count} className={`sb-count${props.tone ? ` is-${props.tone}` : ''}`}>
           {props.count}
         </span>
       ) : null}

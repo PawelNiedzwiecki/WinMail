@@ -18,14 +18,15 @@ import { registerIpc } from './ipc'
 import { Contacts } from './contacts'
 import { Outbox } from './outbox'
 import { Notifier } from './notifications'
+import { WaitingFor } from './waiting'
 import { cleanTemp } from './attachments'
 import { loadWindowState, trackWindowState } from './windowState'
-import type { MessageSummary, OpenMessageEvent } from '../shared/types'
+import type { MessageSummary, OpenMessageEvent, WaitingInfo, WaitingOpenEvent } from '../shared/types'
 // Copied next to the build output, so it is there in dev and in the installed app alike.
 import appIcon from '../../build/icon.ico?asset'
 
 const CONTACTS_SCAN_DELAY_MS = 20_000
-/** How often snoozed mail and scheduled sends are checked. */
+/** How often snoozed mail, scheduled sends and Waiting for nudges are checked. */
 const TIMER_MS = 30_000
 /** How long a closing window waits for the renderer to save drafts. */
 const CLOSE_TIMEOUT_MS = 10_000
@@ -389,6 +390,14 @@ if (!app.requestSingleInstanceLock()) {
       w.focus()
       w.webContents.send('mail:open', e)
     }
+    const showWaiting = (e: WaitingOpenEvent) => {
+      const w = mainWindow()
+      if (!w) return
+      if (w.isMinimized()) w.restore()
+      w.show()
+      w.focus()
+      w.webContents.send('waiting:open', e)
+    }
     // The notifier needs the outbox, which needs the mail service; it is set just below.
     let notifier: Notifier | null = null
     const announce = (accountId: string, list: MessageSummary[]) => void notifier?.announce(accountId, list)
@@ -402,12 +411,21 @@ if (!app.requestSingleInstanceLock()) {
     )
     mail = mailService
     const contacts = new Contacts(store, mailService, (id) => send('contacts:changed', id))
+    const waiting = new WaitingFor(
+      store,
+      mailService,
+      () => send('waiting:changed'),
+      (items: WaitingInfo[]) => notifier?.nudge(items)
+    )
     const queue = new Outbox(
       store,
       mailService,
       () => send('outbox:changed'),
       (e) => send('outbox:event', e),
-      (input) => contacts.recordSent(input.accountId, input.to, input.cc, input.bcc)
+      (input, messageId) => {
+        waiting.sent(input, messageId)
+        contacts.recordSent(input.accountId, input.to, input.cc, input.bcc)
+      }
     )
     outbox = queue
     notifier = new Notifier({
@@ -417,10 +435,18 @@ if (!app.requestSingleInstanceLock()) {
       contacts,
       window: mainWindow,
       open,
-      changed: (e) => send('mail:changed', e)
+      changed: (e) => send('mail:changed', e),
+      showWaiting,
+      stopWaiting: (id) => {
+        try {
+          waiting.stop(id)
+        } catch {
+          // Already answered or stopped in the window.
+        }
+      }
     })
     setMenu()
-    registerIpc(store, mailService, contacts, queue, mailCache)
+    registerIpc(store, mailService, contacts, queue, mailCache, waiting)
     ipcMain.on('app:close-ready', (e) => {
       const w = BrowserWindow.fromWebContents(e.sender)
       if (!w) return
@@ -433,6 +459,7 @@ if (!app.requestSingleInstanceLock()) {
     const tick = () => {
       void mailService.wakeSnoozed()
       void queue.sendDue()
+      void waiting.check()
     }
     setTimeout(tick, CONTACTS_SCAN_DELAY_MS)
     setInterval(tick, TIMER_MS)

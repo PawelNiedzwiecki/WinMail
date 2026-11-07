@@ -1,6 +1,7 @@
 import { api } from '../api'
 import { toInput } from './input'
 import { htmlToPlain } from './outgoing'
+import { scheduleAutoWait } from './waiting'
 import { allSessions, flush, getSession, liveBody, updateSession, type ComposeSession } from './sessions'
 
 /**
@@ -55,6 +56,7 @@ export function touch(id: string): void {
   if (!s.dirty) updateSession(id, { dirty: true })
   schedule(id)
   scheduleRecovery()
+  scheduleAutoWait(id)
 }
 
 function schedule(id: string, delay?: number): void {
@@ -113,7 +115,7 @@ async function save(id: string): Promise<boolean> {
   flush(id)
   const s = getSession(id)
   if (!s || !s.dirty || s.hidden === 'sending' || s.status === 'unsupported') return true
-  const input = toInput(s)
+  const input = toInput(s, 'draft')
   const h = hash(JSON.stringify({ ...input, draftUid: undefined }))
   const edits = x.edits
   if (h === x.hash && s.draftUid !== undefined) {
@@ -181,7 +183,7 @@ export type Recovered = Pick<
   | 'inReplyTo'
   | 'references'
   | 'draftUid'
-> & { savedAt: number }
+> & { savedAt: number; wait?: ComposeSession['wait'] }
 
 let recoveryTimer: number | undefined
 
@@ -214,6 +216,7 @@ function toRecovered(s: ComposeSession): Recovered {
     inReplyTo: s.inReplyTo,
     references: s.references,
     draftUid: lastUid(s.id) ?? s.draftUid,
+    wait: s.wait,
     savedAt: Date.now()
   }
 }

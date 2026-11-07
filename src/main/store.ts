@@ -13,7 +13,8 @@ import {
   type OutboxKind,
   type ScheduledInfo,
   type SendInput,
-  type Settings
+  type Settings,
+  type WaitingInfo
 } from '../shared/types'
 import { normaliseOptIns } from '../shared/contentFeatures'
 
@@ -65,6 +66,8 @@ interface StoreFile {
   settings: Settings
   snoozed: Snoozed[]
   scheduled: Scheduled[]
+  /** Sent messages waiting for a reply (Waiting for). */
+  waiting: WaitingInfo[]
   /** accountId -> labels; kept apart from `settings` so a settings save from the renderer never overwrites them. */
   labels: Record<string, AccountLabelStore>
 }
@@ -76,6 +79,7 @@ const fresh = (): StoreFile => ({
   settings: { ...DEFAULT_SETTINGS },
   snoozed: [],
   scheduled: [],
+  waiting: [],
   labels: {}
 })
 
@@ -118,6 +122,7 @@ export class Store {
       settings: withDefaults(raw.settings),
       snoozed: raw.snoozed ?? [],
       scheduled: raw.scheduled ?? [],
+      waiting: raw.waiting ?? [],
       labels: raw.labels ?? {}
     }
   }
@@ -176,6 +181,7 @@ export class Store {
     delete this.data.secrets[id]
     this.data.snoozed = this.data.snoozed.filter((x) => x.accountId !== id)
     this.data.scheduled = this.data.scheduled.filter((x) => x.accountId !== id)
+    this.data.waiting = this.data.waiting.filter((x) => x.accountId !== id)
     delete this.data.labels[id]
     this.save()
   }
@@ -218,6 +224,17 @@ export class Store {
 
   setScheduled(list: Scheduled[]): void {
     this.data.scheduled = list
+    this.save()
+  }
+
+  // ---------- Waiting for ----------
+
+  listWaiting(): WaitingInfo[] {
+    return this.data.waiting
+  }
+
+  setWaiting(list: WaitingInfo[]): void {
+    this.data.waiting = list
     this.save()
   }
 

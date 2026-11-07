@@ -69,6 +69,7 @@ Existing app-password Google accounts can switch with **Sign in with Google…**
 - One-click unsubscribe banner for mailing lists; Print and Show Original from the message's ··· menu; Mark All as Read on a folder's right-click menu
 - Windows notifications for new mail while WinMail is in the background; click one to open the message
 - Scheduled list in the sidebar to edit or cancel scheduled mail
+- Waiting for: the hourglass in Compose's footer marks a message you expect an answer to. It turns on by itself when you ask people a question (not lists or no-reply addresses), and you can turn it off or pick 1 day to 2 weeks. If nobody replies in time (3 days by default), the message comes back as a nudge: a notification, and a count on **Waiting for** in the sidebar, whose list offers Follow Up, Wait Longer and Done. Out-of-office answers and bounces don't count as replies. All local: nothing moves on the server and nothing goes to Claude
 - Optional Claude features with your own API key (Settings > Claude): Summarise a message, Suggest a reply, AI search (ask for mail in plain language with the sparkle in the search box, or start with `?`). The key alone sends no mail to Claude: Summarise and Suggest a reply each send the message's sender, subject and text, so each has its own switch under "Send message content to Claude" (off until you turn it on), and their results are marked "Sent to Claude". AI search sends only your question
 - HTML mail sanitised with DOMPurify in a sandboxed iframe; remote images blocked until you allow them
 - Tracker shield: a banner such as "Tracked by Mailchimp · 3 tracked links" on mail that tracks you. Tracking pixels are removed even after you allow remote images; tracked links lose their tracking parameters, redirects that carry their destination are opened directly, and other click links are marked with the host they go through. All local: links are never fetched to see where they go
@@ -125,12 +126,14 @@ In a message card or inline reply:
 
 ```
 src/
-  shared/     Types and provider presets used by both processes; trackers.ts is the Tracker shield's rules (with tests)
+  shared/     Types and provider presets used by both processes; trackers.ts is the Tracker shield's rules, waiting.ts the
+              Waiting for rules (both with tests)
   main/       Electron main process
     store.ts  Accounts, settings, encrypted passwords
     mail.ts   IMAP (imapflow) and SMTP (nodemailer), drafts on a second IMAP connection, incremental folder sync
     cache.ts  SQLite copy of folder lists and opened messages (node:sqlite), see CACHE.md
     outbox.ts Undo-send queue and scheduled mail
+    waiting.ts  Waiting for: sent messages expecting a reply, reply detection and nudges (with tests)
     attachments.ts  Which files the page may attach; temporary files for pasted images
     google.ts Google OAuth sign-in and access tokens
     contacts.ts / addressbook.ts  Autocomplete contacts: Google People API, CardDAV, mail history
@@ -140,7 +143,7 @@ src/
     src/api.ts       Bridge, or mock when run in a browser
     src/components/  Sidebar, Toolbar, MessageList, MessageView, SettingsWindow,
                      AddAccount, Welcome, HtmlBody, ToastStack, Dialog, FolderPicker,
-                     WhenPicker (snooze), SourceDialog, ScheduledDialog
+                     WhenPicker (snooze), SourceDialog, ScheduledDialog, WaitingDialog
     src/threads.ts   Conversation grouping
     src/print.ts     Printable copy of a message
     src/trackerShield.ts  Removes tracking pixels and cleans links in a message's HTML

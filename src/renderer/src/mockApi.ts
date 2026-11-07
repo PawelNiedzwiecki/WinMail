@@ -1,5 +1,6 @@
 // Browser-only stand-in for the Electron bridge, used for UI development.
 import { assertOptedIn } from '@shared/contentFeatures'
+import { nudgeTime } from '@shared/waiting'
 import {
   DEFAULT_SETTINGS,
   type Account,
@@ -14,6 +15,8 @@ import {
   type ScheduledInfo,
   type SendInput,
   type Settings,
+  type WaitingInfo,
+  type WaitingOpenEvent,
   type WinMailApi
 } from '@shared/types'
 
@@ -244,6 +247,53 @@ export function createMockApi(): WinMailApi {
         b.unseen = messages.filter((m) => m.accountId === id && m.mailbox === b.path && !m.seen).length
       }
     }
+  }
+
+  // Waiting for: two sent messages expecting a reply, the first already nudged. `?nowaiting` starts with none.
+  const sentCopy = (accountId: string, to: [string, string], subject: string, body: string, mins: number) => {
+    const a = accounts.find((x) => x.id === accountId)
+    const path = boxes[accountId]?.find((b) => b.specialUse === 'sent')?.path ?? 'Sent'
+    return msg(accountId, path, [a?.name ?? 'Me', a?.email ?? 'me'], subject, body, mins, {
+      seen: true,
+      to: [{ name: to[0], email: to[1] }]
+    })
+  }
+  const inMins = (mins: number) => new Date(Date.now() + mins * 60_000).toISOString()
+  let waiting: WaitingInfo[] = []
+  const waitingListeners = new Set<() => void>()
+  const waitingChanged = () => waitingListeners.forEach((cb) => cb())
+  const waitingOpenListeners = new Set<(e: WaitingOpenEvent) => void>()
+  if (!empty && !params.has('nowaiting')) {
+    const quote = sentCopy('icloud', ['Priya Shah', 'priya.shah@example.com'], 'Quote for the kitchen',
+      'Hi Priya,\n\nCould you send the updated quote for the kitchen by Friday?\n\nAlex', 4 * 24 * 60)
+    const venue = sentCopy('gmail', ['Sam Okafor', 'sam.okafor@example.com'], 'Venue for the offsite',
+      'Hi Sam,\n\nDoes the riverside venue work for the 20th? Let me know.\n\nAlex', 26 * 60)
+    messages.push(quote, venue)
+    waiting = [
+      { id: 'w-quote', accountId: 'icloud', messageId: quote.messageId!, to: 'Priya Shah <priya.shah@example.com>',
+        subject: quote.subject, sentAt: quote.date, days: 3, dueAt: ago(24 * 60), nudgedAt: ago(24 * 60) },
+      { id: 'w-venue', accountId: 'gmail', messageId: venue.messageId!, to: 'Sam Okafor <sam.okafor@example.com>',
+        subject: venue.subject, sentAt: venue.date, days: 3, dueAt: nudgeTime(new Date(venue.date), 3).toISOString() }
+    ]
+    // `?nudge`: the first nudge arrives a few seconds after launch, as it would from the main process.
+    if (params.has('nudge')) {
+      waiting[0] = { ...waiting[0]!, nudgedAt: undefined, dueAt: inMins(0.1) }
+      window.setTimeout(() => {
+        waiting = waiting.map((w) => (w.id === 'w-quote' ? { ...w, nudgedAt: new Date().toISOString() } : w))
+        waitingChanged()
+      }, 4000)
+    }
+  }
+  /** Like WaitingFor.sent in main: a reply in the conversation ends the earlier wait; `waitDays` starts a new one. */
+  const waitingSent = (input: SendInput, messageId: string) => {
+    const earlier = new Set([...(input.references ?? []), ...(input.inReplyTo ? [input.inReplyTo] : [])])
+    waiting = waiting.filter((w) => !(w.accountId === input.accountId && earlier.has(w.messageId)))
+    if (input.waitDays && input.waitDays > 0) {
+      const now = new Date()
+      waiting.push({ id: crypto.randomUUID(), accountId: input.accountId, messageId, to: input.to, subject: input.subject,
+        sentAt: now.toISOString(), days: input.waitDays, dueAt: nudgeTime(now, input.waitDays).toISOString() })
+    }
+    waitingChanged()
   }
 
   const find = (accountId: string, mailbox: string, u: number) => {
@@ -542,11 +592,9 @@ export function createMockApi(): WinMailApi {
     async send(input) {
       await sleep(500)
       const sent = boxes[input.accountId]?.find((b) => b.specialUse === 'sent')
-      if (sent) {
-        messages.push(
-          msg(input.accountId, sent.path, ['Me', 'me'], input.subject, input.text, 0, { seen: true, html: input.html ?? null })
-        )
-      }
+      const copy = msg(input.accountId, sent?.path ?? 'Sent', ['Me', 'me'], input.subject, input.text, 0, { seen: true, html: input.html ?? null })
+      if (sent) messages.push(copy)
+      waitingSent(input, copy.messageId!)
       if (input.draftUid) await api.deleteDraft(input.accountId, input.draftUid)
     },
     async queueSend(input) {
@@ -635,6 +683,44 @@ export function createMockApi(): WinMailApi {
     onScheduledChanged(cb) {
       scheduledListeners.add(cb)
       return () => scheduledListeners.delete(cb)
+    },
+    async listWaiting() {
+      return [...waiting].sort((a, b) =>
+        !!a.nudgedAt !== !!b.nudgedAt ? (a.nudgedAt ? -1 : 1) : a.nudgedAt && b.nudgedAt ? b.nudgedAt.localeCompare(a.nudgedAt) : a.dueAt.localeCompare(b.dueAt)
+      )
+    },
+    async stopWaiting(id) {
+      const item = waiting.find((w) => w.id === id)
+      if (!item) throw new Error('This message is no longer waiting for a reply.')
+      waiting = waiting.filter((w) => w.id !== id)
+      waitingChanged()
+      return item
+    },
+    async restoreWaiting(item) {
+      if (!waiting.some((w) => w.id === item.id)) waiting.push(item)
+      waitingChanged()
+    },
+    async waitLonger(id, days) {
+      const item = waiting.find((w) => w.id === id)
+      if (!item) throw new Error('This message is no longer waiting for a reply.')
+      const next = { ...item, days, dueAt: nudgeTime(new Date(), days).toISOString(), nudgedAt: undefined }
+      waiting = waiting.map((w) => (w.id === id ? next : w))
+      waitingChanged()
+      return next
+    },
+    async waitingMessage(id) {
+      await sleep(150)
+      const item = waiting.find((w) => w.id === id)
+      const m = item && messages.find((x) => x.accountId === item.accountId && x.messageId === item.messageId)
+      return m ? summary(m) : null
+    },
+    onWaitingChanged(cb) {
+      waitingListeners.add(cb)
+      return () => waitingListeners.delete(cb)
+    },
+    onWaitingOpen(cb) {
+      waitingOpenListeners.add(cb)
+      return () => waitingOpenListeners.delete(cb)
     },
     async aiAvailable() {
       return !!aiKey

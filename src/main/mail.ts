@@ -41,6 +41,7 @@ import type {
 } from '../shared/types'
 import { getProvider } from '../shared/providers'
 import { categorize } from '../shared/categorize'
+import { isAutomatic } from '../shared/waiting'
 import type { FlagRow, FolderState, FolderStatus, MailCache, SnapState } from './cache'
 import type { AccountLabelStore, Snoozed, Store } from './store'
 import {
@@ -166,6 +167,29 @@ const NO_KEYWORDS = "This account's server can't store labels on messages."
 function keywordsAllowed(mb: ImapFlow['mailbox']): boolean {
   if (!mb) return false
   return !mb.permanentFlags || mb.permanentFlags.has('\\*')
+}
+
+/** Header on WinMail's own drafts that keeps the Waiting for switch (days, or 0 for off); never on sent mail. */
+const WAIT_HEADER = 'X-WinMail-Wait'
+
+/** Most messages fetched when looking for replies to one waited-for message. */
+const MAX_REPLY_ROWS = 50
+/** Message-IDs per OR search when looking for replies, to stay inside servers' limits on search size. */
+const REPLY_SEARCH_BATCH = 20
+
+/**
+ * Fetched mail that answers something: what the Waiting for list needs to tell whether a person replied. Only
+ * messages with In-Reply-To or References are passed on.
+ */
+export interface ReplyCandidate {
+  accountId: string
+  /** Message-IDs in In-Reply-To and References. */
+  parents: string[]
+  from: string
+  /** ISO date. */
+  date: string
+  /** Out-of-office answers and bounces, which are not replies from a person. */
+  automatic: boolean
 }
 
 /** Folder WinMail creates for snoozed mail. */
@@ -385,6 +409,13 @@ export class MailService {
     /** Unread messages that arrived in an inbox since the last check. */
     private arrived: (accountId: string, messages: MessageSummary[]) => void = () => {}
   ) {}
+
+  /** Sees every reply WinMail fetches, from any folder, so Waiting for notices answers without a search. */
+  private replyWatch: (rows: ReplyCandidate[]) => void = () => {}
+
+  watchReplies(fn: (rows: ReplyCandidate[]) => void): void {
+    this.replyWatch = fn
+  }
 
   // ---------- Connections ----------
 
@@ -994,7 +1025,7 @@ export class MailService {
           internalDate: true,
           bodyStructure: true,
           threadId: true,
-          headers: ['references', 'list-id', 'list-unsubscribe', 'precedence', 'auto-submitted']
+          headers: ['references', 'list-id', 'list-unsubscribe', 'precedence', 'auto-submitted', 'x-autoreply', 'x-autorespond']
         },
         { uid: byUid }
       ),
@@ -1038,7 +1069,8 @@ export class MailService {
       this.previews.delete(k)
     }
 
-    return rows
+    const replies: ReplyCandidate[] = []
+    const list = rows
       .map((r): MessageSummary => {
         const env = r.envelope
         const date = env?.date ?? r.internalDate ?? new Date()
@@ -1046,6 +1078,17 @@ export class MailService {
         const refs = messageIds(hdr)
         const from = toAddresses(env?.from)[0] ?? { name: '(Unknown)', email: '' }
         const subject = env?.subject || '(No Subject)'
+        const parents = [...new Set([...refs, ...messageIds(env?.inReplyTo)])]
+        const autoSubmitted = /^auto-submitted:\s*(?!no\b)\S/im.test(hdr) || /^x-auto(reply|respond):/im.test(hdr)
+        if (parents.length) {
+          replies.push({
+            accountId,
+            parents,
+            from: from.email,
+            date: new Date(date).toISOString(),
+            automatic: isAutomatic({ from: from.email, subject, autoSubmitted })
+          })
+        }
         return {
           key: `${accountId}|${path}|${r.uid}`,
           accountId,
@@ -1060,7 +1103,7 @@ export class MailService {
           flagged: r.flags?.has('\\Flagged') ?? false,
           hasAttachments: hasAttachments(r.bodyStructure),
           messageId: env?.messageId || undefined,
-          parents: [...new Set([...refs, ...messageIds(env?.inReplyTo)])],
+          parents,
           threadId: r.threadId,
           uidValidity: String(mb.uidValidity),
           labels: gmail ? gmailLabels(r.labels, folderLabel) : keywordLabels(r.flags),
@@ -1075,6 +1118,14 @@ export class MailService {
         }
       })
       .sort((a, b) => b.date.localeCompare(a.date))
+    if (replies.length) {
+      try {
+        this.replyWatch(replies)
+      } catch (err) {
+        console.error('[waiting] reply watch failed:', err instanceof Error ? err.message : err)
+      }
+    }
+    return list
   }
 
   async getMessage(accountId: string, path: string, uid: number, uidValidity?: string): Promise<MessageDetail> {
@@ -1575,6 +1626,69 @@ export class MailService {
     )
   }
 
+  // ---------- Waiting for ----------
+
+  /**
+   * Looks on the server for replies to messages sent with these Message-IDs. Whatever is found is fetched, which
+   * passes it through the reply watch like any other mail. Throws when the account can't be searched, so the
+   * caller knows nothing was learned. Gmail: the conversation in All Mail. Elsewhere: In-Reply-To and References
+   * in the inbox, the archive and All Mail where there is one.
+   */
+  async lookForReplies(accountId: string, ids: string[]): Promise<void> {
+    if (!ids.length) return
+    if (this.isGmail(accountId)) {
+      const all = await this.specialPath(accountId, 'all')
+      if (!all) throw new Error('This Gmail account shows no All Mail folder over IMAP.')
+      await this.withMailbox(accountId, all, async (c) => {
+        if (!c.mailbox || !c.mailbox.exists) return
+        for (const id of ids) {
+          const own = await c.search({ header: { 'message-id': id } }, { uid: true })
+          if (!Array.isArray(own)) throw new Error('The server refused the search.')
+          if (!own.length) continue
+          const rows = await c.fetchAll(own.join(','), { uid: true, threadId: true }, { uid: true })
+          for (const threadId of new Set(rows.map((r) => r.threadId).filter((t): t is string => !!t))) {
+            const uids = await c.search({ threadId }, { uid: true })
+            if (!Array.isArray(uids)) throw new Error('The server refused the search.')
+            const rest = uids.filter((u) => !own.includes(u)).sort((a, b) => b - a).slice(0, MAX_REPLY_ROWS)
+            if (rest.length) await this.fetchSummaries(c, accountId, all, rest.join(','), true)
+          }
+        }
+      })
+      return
+    }
+    await this.specialPath(accountId, 'inbox')
+    const paths = [this.inboxOf(accountId), await this.specialPath(accountId, 'archive'), await this.specialPath(accountId, 'all')]
+    for (const path of new Set(paths.filter((p): p is string => !!p))) {
+      await this.withMailbox(accountId, path, async (c) => {
+        if (!c.mailbox || !c.mailbox.exists) return
+        for (let i = 0; i < ids.length; i += REPLY_SEARCH_BATCH) {
+          const batch = ids.slice(i, i + REPLY_SEARCH_BATCH)
+          const criteria = batch.flatMap((id): SearchObject[] => [{ header: { 'in-reply-to': id } }, { header: { references: id } }])
+          const uids = await c.search({ or: criteria }, { uid: true })
+          if (!Array.isArray(uids)) throw new Error('The server refused the search.')
+          const newest = uids.sort((a, b) => b - a).slice(0, MAX_REPLY_ROWS)
+          if (newest.length) await this.fetchSummaries(c, accountId, path, newest.join(','), true)
+        }
+      })
+    }
+  }
+
+  /** The sent copy of a message, found by Message-ID in Sent (or All Mail on Gmail); null when it isn't there. */
+  async findSent(accountId: string, messageId: string): Promise<MessageSummary | null> {
+    const paths = [await this.specialPath(accountId, 'sent'), this.isGmail(accountId) ? await this.specialPath(accountId, 'all') : undefined]
+    for (const path of new Set(paths.filter((p): p is string => !!p))) {
+      const found = await this.withMailbox(accountId, path, async (c) => {
+        if (!c.mailbox || !c.mailbox.exists) return null
+        const uids = (await c.search({ header: { 'message-id': messageId } }, { uid: true })) || []
+        if (!uids.length) return null
+        const rows = await this.fetchSummaries(c, accountId, path, String(Math.max(...uids)), true)
+        return rows[0] ?? null
+      })
+      if (found) return found
+    }
+    return null
+  }
+
   // ---------- Snooze ----------
 
   async snooze(accountId: string, path: string, uids: number[], until: string, uidValidity?: string): Promise<void> {
@@ -1690,9 +1804,9 @@ export class MailService {
 
   /**
    * `delivered` runs as soon as the server has accepted the message, before the Sent copy and draft clean-up.
-   * `calendar` adds an iCalendar part, for answering invitations.
+   * `calendar` adds an iCalendar part, for answering invitations. Returns the message's Message-ID.
    */
-  async send(input: SendInput, delivered?: () => void, calendar?: Mail.IcalAttachment): Promise<void> {
+  async send(input: SendInput, delivered?: () => void, calendar?: Mail.IcalAttachment): Promise<string> {
     const acc = this.store.getAccount(input.accountId)
     const creds = await this.creds(acc)
     const mail = this.mailOptions(acc, input, calendar)
@@ -1721,6 +1835,7 @@ export class MailService {
       }
     }
     if (input.draftUid) await this.removeDrafts(acc.id, [input.draftUid], true)
+    return String(mail.messageId)
   }
 
   async saveDraft(input: SendInput): Promise<number | null> {
@@ -1734,6 +1849,10 @@ export class MailService {
       )
     }
     const mail = this.mailOptions(acc, input)
+    // The Waiting for switch goes with the draft, so reopening it elsewhere in WinMail keeps the user's choice.
+    if (input.waitDays !== undefined) {
+      mail.headers = { ...(mail.headers as Record<string, string> | undefined), [WAIT_HEADER]: String(Math.max(0, Math.round(input.waitDays))) }
+    }
     const raw = await compile(mail, true)
     this.statuses.delete(`${acc.id}|${drafts}`)
     const uid = await this.withUpload(acc.id, async (c) => {
@@ -1861,6 +1980,8 @@ export class MailService {
     const refs = p.references ? (Array.isArray(p.references) ? p.references : [p.references]) : []
     const isDraft = path === (await this.specialPath(accountId, 'drafts'))
     if (isDraft) this.cache.rememberDraft(accountId, uid, validity)
+    const waitHeader = String(p.headers.get(WAIT_HEADER.toLowerCase()) ?? '').trim()
+    const wait = /^\d{1,3}$/.test(waitHeader) ? Number(waitHeader) : undefined
     return {
       accountId,
       to: formatAddresses(parsedAddresses(p.to)),
@@ -1872,7 +1993,8 @@ export class MailService {
       attachments,
       inReplyTo: p.inReplyTo,
       references: refs,
-      draftUid: isDraft ? uid : undefined
+      draftUid: isDraft ? uid : undefined,
+      waitDays: wait
     }
   }
 }
