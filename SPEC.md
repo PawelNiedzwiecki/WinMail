@@ -355,6 +355,8 @@ Distribution: GitHub Releases on this repository only. WinMail gets its own doma
 
 Sign in with Google: one shared WinMail OAuth client, built into release builds and verified by Google for the restricted `https://mail.google.com/` scope. Verification is a v1.0 blocker. Before applying, ask Google whether the Claude features that send mail content (Summarise, Suggest a reply, the Claude paragraph in the Brief, Ask your mailbox) need the annual CASA security assessment. App passwords stay as the fallback. A developer's own client in `.env.local` still overrides the shared one.
 
+Sign in with Microsoft (Outlook): one WinMail app in Microsoft Entra for personal and work/school accounts, as a public client with PKCE and a loopback redirect. Mail is read over IMAP with XOAUTH2, like every other provider. Sending goes through the Microsoft Graph API (`POST /me/sendMail`, scope `Mail.Send`) instead of SMTP, because OAuth SMTP is unreliable on personal Outlook.com accounts. Before building it, a one-day test confirms that IMAP with OAuth works on a personal and a work account.
+
 ### Not planned
 - Confidential mode, Chat/Meet/Spaces: Google services, not mail.
 - Server-side filters UI and vacation responder: need the Gmail API or per-provider Sieve.
