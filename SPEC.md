@@ -351,6 +351,8 @@ v1.0 is for anyone who downloads it from GitHub Releases. It ships:
 - One-click sign-in for Google and Outlook: no developer setup, no app passwords.
 - Release plumbing: auto-update, a signed installer.
 
+Distribution: GitHub Releases on this repository only. There is no website or domain for now, so the repository is the homepage, and its README and SECURITY.md stand in for a support page.
+
 ### Not planned
 - Confidential mode, Chat/Meet/Spaces: Google services, not mail.
 - Server-side filters UI and vacation responder: need the Gmail API or per-provider Sieve.
