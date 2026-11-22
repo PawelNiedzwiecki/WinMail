@@ -351,7 +351,9 @@ v1.0 is for anyone who downloads it from GitHub Releases. It ships:
 - One-click sign-in for Google and Outlook: no developer setup, no app passwords.
 - Release plumbing: auto-update, a signed installer.
 
-Distribution: GitHub Releases on this repository only. There is no website or domain for now, so the repository is the homepage, and its README and SECURITY.md stand in for a support page.
+Distribution: GitHub Releases on this repository only. WinMail gets its own domain, but only for the homepage and privacy policy that Google's verification asks for. Downloads stay on GitHub.
+
+Sign in with Google: one shared WinMail OAuth client, built into release builds and verified by Google for the restricted `https://mail.google.com/` scope. Verification is a v1.0 blocker. Before applying, ask Google whether the Claude features that send mail content (Summarise, Suggest a reply, the Claude paragraph in the Brief, Ask your mailbox) need the annual CASA security assessment. App passwords stay as the fallback. A developer's own client in `.env.local` still overrides the shared one.
 
 ### Not planned
 - Confidential mode, Chat/Meet/Spaces: Google services, not mail.
