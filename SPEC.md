@@ -344,6 +344,13 @@ Build order: Tracker shield first, then Waiting for, then Batched delivery, then
 
 Parallel track: **Outlook** (Microsoft OAuth + XOAUTH2) is separate from Tier 4. It doesn't block Tier 4, but it ships before any public release.
 
+### v1.0 — first public release (decided 2026-11-22)
+v1.0 is for anyone who downloads it from GitHub Releases. It ships:
+- Tiers 1–3 with their real-account checks passing (CACHE.md, COMPOSE.md, DELIVERY.md, NOTIFICATIONS.md, TOOLBAR.md).
+- All of Tier 4: Newsletter magazine, Unsubscribe audit, Vault (with Retire an account) and Ask your mailbox, as well as what is already built.
+- One-click sign-in for Google and Outlook: no developer setup, no app passwords.
+- Release plumbing: auto-update, a signed installer.
+
 ### Not planned
 - Confidential mode, Chat/Meet/Spaces: Google services, not mail.
 - Server-side filters UI and vacation responder: need the Gmail API or per-provider Sieve.
