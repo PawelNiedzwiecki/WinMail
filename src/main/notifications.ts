@@ -43,7 +43,10 @@ interface Deps {
   showWaiting: (e: WaitingOpenEvent) => void
   /** Stops waiting for a reply to one message (the nudge's Done button). */
   stopWaiting: (id: string) => void
-  /** Batched delivery holds this Inbox message until the next Delivery: no notification now. */
+  /**
+   * Batched delivery holds this Inbox message until the next Delivery, or Newsletter magazine is about to move it
+   * out of the Inbox: no notification now.
+   */
   held: (m: MessageSummary) => boolean
   /** Shows All Inboxes with the Brief at the top (the Morning brief notification). */
   showBrief: () => void

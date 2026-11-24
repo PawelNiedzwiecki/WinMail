@@ -3,6 +3,7 @@ import { assertOptedIn } from '@shared/contentFeatures'
 import { nudgeTime } from '@shared/waiting'
 import { makeBrief } from '@shared/brief'
 import { advance, formatTime, isHeld, nextDeliveryAt, sameDay, vipAddresses, type HoldRule } from '@shared/delivery'
+import { NEWSLETTER_FOLDER, isNewsletter, ruleMap, withRule, type NewsletterRule } from '@shared/newsletters'
 import {
   DEFAULT_SETTINGS,
   type Account,
@@ -403,6 +404,89 @@ export function createMockApi(): WinMailApi {
     if (step.crossed) deliver('scheduled', step.crossed)
   }, 30_000)
 
+  // Newsletter magazine. `?magazine` starts with it on: a Newsletters folder in each account holding a week of issues,
+  // and three Newsletters still in the Inboxes for the one-time move.
+  const newsletterListeners = new Set<() => void>()
+  const newslettersChanged = () => newsletterListeners.forEach((cb) => cb())
+  const newsletterBox = (id: string, create: boolean): MailboxInfo | undefined => {
+    let box = boxes[id]?.find((b) => b.specialUse === 'newsletters')
+    if (!box && create) {
+      box = { path: NEWSLETTER_FOLDER, name: 'Newsletters', specialUse: 'newsletters', unseen: 0, depth: 0 }
+      boxes[id]?.push(box)
+    }
+    return box
+  }
+  const newsletterRule = (): NewsletterRule => ({
+    rules: ruleMap(settings.newsletterRules),
+    vips: vipAddresses(settings.vips),
+    own: accounts.map((a) => a.email.toLowerCase())
+  })
+  /** A newsletter's body: a masthead, a lead story and a few links, in the sender's colour. */
+  const issueHtml = (title: string, colour: string, lead: string, items: string[]) =>
+    `<div style="font-family:Georgia,serif;max-width:600px;margin:0 auto;color:#1d2433">
+<div style="background:${colour};color:#fff;padding:18px 22px;font:600 22px/1.2 system-ui,sans-serif">${title}</div>
+<div style="padding:18px 22px"><p style="font-size:17px;line-height:1.55">${lead}</p>
+${items.map((t) => `<h3 style="font:600 16px system-ui,sans-serif;margin:18px 0 4px">${t}</h3><p style="line-height:1.55;margin:0">A short paragraph about ${t.toLowerCase()}, with a link to <a href="https://example.com/read?utm_source=newsletter">read more</a>.</p>`).join('\n')}
+<p style="color:#888;font:12px system-ui,sans-serif;margin-top:28px">You subscribed at example.com. <a href="https://example.com/unsubscribe">Unsubscribe</a></p></div></div>`
+  const letter = (
+    accountId: string,
+    mailbox: string,
+    from: [string, string],
+    subject: string,
+    colour: string,
+    lead: string,
+    items: string[],
+    mins: number,
+    seen = false
+  ) =>
+    msg(accountId, mailbox, from, subject, `${lead}\n\n${items.join('\n')}`, mins, {
+      seen,
+      newsletter: true,
+      category: 'promotions',
+      html: issueHtml(from[0], colour, lead, items),
+      unsubscribe: { url: `https://${from[1].split('@')[1]}/unsubscribe`, oneClick: true }
+    })
+  // Contoso Weekly in the Inbox above is a Newsletter by its headers.
+  for (const m of messages) if (m.from.email === 'news@contoso.example') Object.assign(m, { newsletter: true })
+  if (!empty && params.has('magazine')) {
+    settings = { ...settings, newsletters: true }
+    const day = 24 * 60
+    const g = newsletterBox('gmail', true)!.path
+    const i = newsletterBox('icloud', true)!.path
+    messages.push(
+      letter('gmail', g, ['The Morning Byte', 'hello@morningbyte.example'], 'Chips, clouds and a quiet launch', '#1f6feb',
+        'Good morning. A smaller week in tech, which is no bad thing: three stories worth your coffee.',
+        ['A laptop chip that sips power', 'Why the cloud bill went down', 'The launch nobody noticed'], 95),
+      letter('icloud', i, ['Design Notes', 'notes@designnotes.example'], 'On empty states', '#8a3ffc',
+        'Empty states are the first thing a new user sees. This week: five that get it right, and one that does not.',
+        ['Say what will be here', 'Offer one next step', 'Skip the cartoon'], 180),
+      letter('gmail', g, ['Pocket Recipes', 'cook@pocketrecipes.example'], 'Three soups for a cold week', '#d1495b',
+        'It is soup season. Each of these takes under 40 minutes and freezes well.',
+        ['Roast squash and sage', 'Lentil and lemon', 'Miso noodle'], 260, true),
+      letter('gmail', g, ['The Morning Byte', 'hello@morningbyte.example'], 'Keyboards are back', '#1f6feb',
+        'Mechanical keyboards are having a moment again. Plus: a browser that forgets on purpose.',
+        ['Clicky is the new quiet', 'A browser with no history', 'Five tools we tried'], day + 80, true),
+      letter('icloud', i, ['Field Guide', 'letters@fieldguide.example'], 'Birds of late autumn', '#2b8a3e',
+        'The fieldfares are in. A guide to what you can see from a kitchen window this month.',
+        ['Fieldfare and redwing', 'Feeding without fuss', 'Where to look at dusk'], day + 300),
+      letter('gmail', g, ['Contoso Weekly', 'news@contoso.example'], 'Contoso Weekly: the roadmap, in full', '#14233c',
+        'Here is everything planned for the next six months, and what we decided not to build.',
+        ['Offline mode, done', 'Sync for teams', 'What we cut'], 3 * day + 30, true),
+      letter('icloud', i, ['Design Notes', 'notes@designnotes.example'], 'Type that reads well on screens', '#8a3ffc',
+        'Line length matters more than the typeface. A short guide with examples.',
+        ['Sixty to seventy-five characters', 'Leading for body text', 'When to use a serif'], 4 * day + 200, true),
+      letter('gmail', g, ['Pocket Recipes', 'cook@pocketrecipes.example'], 'One-pan dinners', '#d1495b',
+        'Fewer dishes, same flavour. Four dinners that use one pan from start to finish.',
+        ['Chicken, leeks and beans', 'Gnocchi traybake', 'Spiced chickpeas', 'Salmon with greens'], 8 * day, true),
+      letter('icloud', 'INBOX', ['Field Guide', 'letters@fieldguide.example'], 'Owls, and how to hear them', '#2b8a3e',
+        'Most owls are heard before they are seen. A guide to the calls you might catch tonight.',
+        ['Tawny owl', 'Barn owl', 'Little owl'], 70),
+      letter('gmail', 'INBOX', ['Pocket Recipes', 'cook@pocketrecipes.example'], 'Bread without kneading', '#d1495b',
+        'Four ingredients, one bowl and a long wait. The easiest loaf there is.',
+        ['The overnight rise', 'Baking in a pot', 'Variations'], 2 * day, true)
+    )
+  }
+
   const find = (accountId: string, mailbox: string, u: number) => {
     // A Gmail label folder lists the messages carrying the label, wherever they are.
     const m = isLabelBox(accountId, mailbox)
@@ -499,7 +583,10 @@ export function createMockApi(): WinMailApi {
         vipAddresses(before.vips).join() !== vipAddresses(s.vips).join()
       )
         deliveryChanged()
-      return s
+      // Sender rules only change through setNewsletterRule, as in main.
+      settings = { ...settings, newsletterRules: before.newsletterRules }
+      if (before.newsletters !== s.newsletters) newslettersChanged()
+      return settings
     },
     async listMailboxes(id) {
       await unreachable(80)
@@ -864,6 +951,34 @@ export function createMockApi(): WinMailApi {
       const names = [...new Set(b.needs.map((n) => (n.item.from.name || n.item.from.email).split(' ')[0]))]
       return `${names.slice(0, 2).join(' and ') || 'Nobody'} wrote to you directly and may need an answer today. ` +
         `The other ${r.items.length - b.needs.length} messages are updates and newsletters that can wait.`
+    },
+    async countInboxNewsletters() {
+      await unreachable(500)
+      const rule = newsletterRule()
+      return messages.filter((m) => m.mailbox === inboxOf(m.accountId) && isNewsletter(m, rule)).length
+    },
+    async moveInboxNewsletters() {
+      await unreachable(700)
+      if (!settings.newsletters) throw new Error('Newsletter magazine is off.')
+      const rule = newsletterRule()
+      const found = messages.filter((m) => m.mailbox === inboxOf(m.accountId) && isNewsletter(m, rule))
+      for (const m of found) await api.moveTo(m.accountId, m.mailbox, [m.uid], newsletterBox(m.accountId, true)!.path)
+      if (found.length) newslettersChanged()
+      return found.length
+    },
+    async setNewsletterRule(sender, rule, message) {
+      await sleep(150)
+      settings = { ...settings, newsletterRules: withRule(settings.newsletterRules, sender, rule) }
+      if (message && rule === 'never' && message.mailbox !== inboxOf(message.accountId)) {
+        await api.moveTo(message.accountId, message.mailbox, [message.uid], inboxOf(message.accountId)!)
+      } else if (message && rule === 'always' && message.mailbox === inboxOf(message.accountId) && settings.newsletters) {
+        await api.moveTo(message.accountId, message.mailbox, [message.uid], newsletterBox(message.accountId, true)!.path)
+      }
+      newslettersChanged()
+    },
+    onNewslettersChanged(cb) {
+      newsletterListeners.add(cb)
+      return () => newsletterListeners.delete(cb)
     },
     onShowBrief() {
       return () => {}

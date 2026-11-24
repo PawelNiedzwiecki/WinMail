@@ -12,15 +12,15 @@ export interface CategoryInput {
   automated?: boolean
 }
 
-const SOCIAL_DOMAINS =
+export const SOCIAL_DOMAINS =
   /(^|\.)(facebookmail|facebook|linkedin|twitter|x|instagram|pinterest|reddit|redditmail|tiktok|snapchat|discord|whatsapp|youtube|meetup|quora|tumblr|nextdoor|threads|mastodon|bsky)\.(com|net|app|social)$/i
 
 const TRANSACTIONAL_LOCAL = /^(no-?reply|do-?not-?reply|notifications?|alerts?|billing|receipts?|orders?|invoices?|support|security|account|accounts|service|system|mailer-daemon|postmaster)([+._-]|$)/i
-const TRANSACTIONAL_SUBJECT =
+export const TRANSACTIONAL_SUBJECT =
   /\b(receipt|invoice|order|payment|statement|confirm(ed|ation)?|verif(y|ication)|security alert|sign-?in|password|one-?time|your code|shipped|delivered|delivery|tracking|booking|reservation|itinerary|ticket|appointment|reminder|renewal|subscription)\b/i
 
 const PROMO_LOCAL = /^(news(letter)?|marketing|offers?|deals?|promo(tions?)?|digest|shop|store|sales)([+._-]|$)/i
-const PROMO_SUBJECT = /(\d+\s?%\s?off|\bsale\b|discount|\bdeal(s)?\b|coupon|free shipping|limited time|exclusive|\boffer\b|save \d|last chance|\bnew arrivals?\b|newsletter|weekly digest)/i
+export const PROMO_SUBJECT = /(\d+\s?%\s?off|\bsale\b|discount|\bdeal(s)?\b|coupon|free shipping|limited time|exclusive|\boffer\b|save \d|last chance|\bnew arrivals?\b|newsletter|weekly digest)/i
 
 /**
  * Gmail-style category for a message. Google accounts get theirs from Gmail itself; this is for every

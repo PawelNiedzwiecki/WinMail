@@ -12,6 +12,7 @@ import {
   type DeliveryRecord,
   type LabelColour,
   type LabelSupport,
+  type NewsletterRuleEntry,
   type OutboxKind,
   type ScheduledInfo,
   type SendInput,
@@ -75,6 +76,27 @@ interface StoreFile {
   labels: Record<string, AccountLabelStore>
   /** Batched delivery's own state; kept apart from `settings` for the same reason. */
   delivery: DeliveryStore
+  /** Newsletter magazine's own state. */
+  newsletters: NewsletterStore
+}
+
+/** Where Newsletter magazine has looked in an account's Inbox. */
+export interface NewsletterMark {
+  uidValidity: string
+  /** The highest Inbox UID already looked at. */
+  uid: number
+  /** ISO time WinMail started watching this Inbox. Mail that arrived before it is never moved by itself. */
+  since: string
+}
+
+export interface NewsletterStore {
+  /** accountId -> mark. */
+  marks: Record<string, NewsletterMark>
+  /**
+   * Message-IDs WinMail moved to Newsletters, newest first. One that shows up in the Inbox again was moved back by
+   * the user (or woke from Snooze), so it stays.
+   */
+  moved: string[]
 }
 
 /** What Batched delivery keeps between runs. */
@@ -94,8 +116,23 @@ const fresh = (): StoreFile => ({
   scheduled: [],
   waiting: [],
   labels: {},
-  delivery: { deliveredUntil: null, records: [] }
+  delivery: { deliveredUntil: null, records: [] },
+  newsletters: { marks: {}, moved: [] }
 })
+
+/** Sender rules as saved: each address once, lower case, newest first; anything without an address is dropped. */
+function normaliseRules(list: unknown): NewsletterRuleEntry[] {
+  if (!Array.isArray(list)) return []
+  const seen = new Set<string>()
+  const out: NewsletterRuleEntry[] = []
+  for (const r of list as Partial<NewsletterRuleEntry>[]) {
+    const email = typeof r?.email === 'string' ? r.email.trim().toLowerCase() : ''
+    if (!email.includes('@') || seen.has(email) || (r.rule !== 'always' && r.rule !== 'never')) continue
+    seen.add(email)
+    out.push({ email, name: typeof r.name === 'string' && r.name.trim() ? r.name.trim() : undefined, rule: r.rule })
+  }
+  return out
+}
 
 /** VIPs as saved: each address once, trimmed; anything without an address is dropped. */
 function normaliseVips(list: unknown): Contact[] {
@@ -121,7 +158,11 @@ function withDefaults(s: Partial<Settings> | undefined): Settings {
     deliveryTimes: normaliseTimes(s?.deliveryTimes),
     vips: normaliseVips(s?.vips),
     brief: s?.brief !== false,
-    morningBriefNotify: s?.morningBriefNotify !== false
+    morningBriefNotify: s?.morningBriefNotify !== false,
+    newsletters: s?.newsletters === true,
+    magazinePeriod: s?.magazinePeriod === 'week' ? 'week' : 'day',
+    magazineWeekday: typeof s?.magazineWeekday === 'number' && Number.isInteger(s.magazineWeekday) && s.magazineWeekday >= 0 && s.magazineWeekday <= 6 ? s.magazineWeekday : 1,
+    newsletterRules: normaliseRules(s?.newsletterRules)
   }
 }
 
@@ -164,6 +205,10 @@ export class Store {
       delivery: {
         deliveredUntil: typeof raw.delivery?.deliveredUntil === 'string' ? raw.delivery.deliveredUntil : null,
         records: Array.isArray(raw.delivery?.records) ? raw.delivery.records : []
+      },
+      newsletters: {
+        marks: raw.newsletters?.marks && typeof raw.newsletters.marks === 'object' ? raw.newsletters.marks : {},
+        moved: Array.isArray(raw.newsletters?.moved) ? raw.newsletters.moved.filter((x) => typeof x === 'string') : []
       }
     }
   }
@@ -227,6 +272,7 @@ export class Store {
     this.data.delivery.records = this.data.delivery.records
       .map((r) => ({ ...r, items: r.items.filter((i) => i.accountId !== id) }))
       .filter((r) => r.items.length || r.more)
+    delete this.data.newsletters.marks[id]
     this.save()
   }
 
@@ -234,10 +280,44 @@ export class Store {
     return this.data.settings
   }
 
+  /**
+   * Saves settings from a window. Sender rules are kept as they are: they only change through `setNewsletterRules`,
+   * so a window holding an older copy can't undo a rule made from a message's menu.
+   */
   setSettings(s: Settings): Settings {
-    this.data.settings = withDefaults(s)
+    this.data.settings = withDefaults({ ...s, newsletterRules: this.data.settings.newsletterRules })
     this.save()
     return this.data.settings
+  }
+
+  setNewsletterRules(list: NewsletterRuleEntry[]): Settings {
+    this.data.settings = withDefaults({ ...this.data.settings, newsletterRules: list })
+    this.save()
+    return this.data.settings
+  }
+
+  // ---------- Newsletter magazine ----------
+
+  newsletterMark(accountId: string): NewsletterMark | null {
+    return this.data.newsletters.marks[accountId] ?? null
+  }
+
+  setNewsletterMark(accountId: string, mark: NewsletterMark | null): void {
+    if (mark) this.data.newsletters.marks[accountId] = mark
+    else delete this.data.newsletters.marks[accountId]
+    this.save()
+  }
+
+  newslettersMoved(): string[] {
+    return this.data.newsletters.moved
+  }
+
+  /** Remembers Message-IDs moved to Newsletters; the newest 5,000 are kept. */
+  addNewslettersMoved(ids: string[]): void {
+    if (!ids.length) return
+    const fresh = new Set(ids)
+    this.data.newsletters.moved = [...ids, ...this.data.newsletters.moved.filter((x) => !fresh.has(x))].slice(0, 5000)
+    this.save()
   }
 
   // ---------- Labels ----------
