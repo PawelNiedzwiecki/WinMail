@@ -44,6 +44,7 @@ import { categorize } from '../shared/categorize'
 import { isAutomatic } from '../shared/waiting'
 import { isHeld, type Holdable, type HoldRule } from '../shared/delivery'
 import { OWN_ID_PREFIX } from '../shared/brief'
+import { NEWSLETTER_FOLDER, looksLikeNewsletter } from '../shared/newsletters'
 import type { FlagRow, FolderState, FolderStatus, MailCache, SnapState } from './cache'
 import type { AccountLabelStore, Snoozed, Store } from './store'
 import {
@@ -136,7 +137,8 @@ const SPECIAL_NAME: Record<SpecialUse, string> = {
   archive: 'Archive',
   all: 'All Mail',
   flagged: 'Flagged',
-  snoozed: 'Snoozed'
+  snoozed: 'Snoozed',
+  newsletters: 'Newsletters'
 }
 
 const SPECIAL_ORDER: SpecialUse[] = [
@@ -148,7 +150,8 @@ const SPECIAL_ORDER: SpecialUse[] = [
   'trash',
   'archive',
   'all',
-  'flagged'
+  'flagged',
+  'newsletters'
 ]
 
 /** A LIST-STATUS answer this young still describes the folder, so a folder it says is unchanged is not opened. */
@@ -271,6 +274,42 @@ function parsedAddresses(a: AddressObject | AddressObject[] | undefined): Addres
 /** Message-IDs in a References or In-Reply-To header. */
 function messageIds(header: string | undefined): string[] {
   return header?.match(/<[^<>\s]+>/g) ?? []
+}
+
+/** A header's value from raw header lines, folded lines joined; null when it is missing. */
+function headerValue(raw: string, name: string): string | null {
+  const m = new RegExp(`^${name}:[ \\t]*(.*(?:\\r?\\n[ \\t].*)*)`, 'im').exec(raw)
+  return m ? m[1]!.replace(/\r?\n[ \t]+/g, ' ').trim() : null
+}
+
+/** Headers fetched with every message summary. */
+const SUMMARY_HEADERS = ['references', 'list-id', 'list-unsubscribe', 'list-post', 'precedence', 'auto-submitted', 'x-autoreply', 'x-autorespond']
+
+/** Whether raw summary headers look like a Newsletter (shared/newsletters.ts). */
+function newsletterFrom(hdr: string, from: string, subject: string, isReply: boolean): boolean {
+  return looksLikeNewsletter({
+    from,
+    subject,
+    listUnsubscribe: headerValue(hdr, 'list-unsubscribe'),
+    listPost: headerValue(hdr, 'list-post'),
+    isReply,
+    automated: /^auto-submitted:\s*(?!no\b)\S/im.test(hdr)
+  })
+}
+
+/** In-Reply-To or References name another message. (List-Id and List-Unsubscribe also hold `<…>`, so not all headers.) */
+function isReplyHeaders(hdr: string, inReplyTo: string | undefined): boolean {
+  return messageIds(headerValue(hdr, 'references') ?? undefined).length > 0 || messageIds(inReplyTo).length > 0
+}
+
+/** An Inbox message as Newsletter magazine sees it: enough to decide, without downloading a preview. */
+export interface NewsletterCandidate {
+  uid: number
+  from: Address
+  newsletter: boolean
+  messageId?: string
+  /** ISO time the server received it (INTERNALDATE, which survives moves). */
+  arrivedAt?: string
 }
 
 function formatAddresses(list: Address[]): string {
@@ -451,6 +490,13 @@ export class MailService {
     this.holdRule = fn
   }
 
+  /** Told when an account's Inbox gets new mail (IMAP EXISTS), for Newsletter magazine. */
+  private inboxGrew: (accountId: string) => void = () => {}
+
+  watchInbox(fn: (accountId: string) => void): void {
+    this.inboxGrew = fn
+  }
+
   watchReplies(fn: (rows: ReplyCandidate[]) => void): void {
     this.replyWatch = fn
   }
@@ -483,7 +529,10 @@ export class MailService {
       })
       c.on('exists', (d) => {
         this.emit({ accountId, path: d.path })
-        if (d.path === this.inboxOf(accountId)) void this.checkArrived(accountId)
+        if (d.path === this.inboxOf(accountId)) {
+          void this.checkArrived(accountId)
+          this.inboxGrew(accountId)
+        }
       })
       try {
         await c.connect()
@@ -717,7 +766,9 @@ export class MailService {
           ? 'inbox'
           : l.name === SNOOZE_FOLDER
             ? 'snoozed'
-            : (SPECIAL[l.specialUse ?? ''] ?? null)
+            : l.name === NEWSLETTER_FOLDER && (!l.parentPath || l.parentPath.toUpperCase() === 'INBOX')
+              ? 'newsletters'
+              : (SPECIAL[l.specialUse ?? ''] ?? null)
       if (use && !special[use]) special[use] = l.path
       return {
         path: l.path,
@@ -1165,7 +1216,7 @@ export class MailService {
           internalDate: true,
           bodyStructure: true,
           threadId: true,
-          headers: ['references', 'list-id', 'list-unsubscribe', 'precedence', 'auto-submitted', 'x-autoreply', 'x-autorespond']
+          headers: SUMMARY_HEADERS
         },
         { uid: byUid }
       ),
@@ -1260,7 +1311,8 @@ export class MailService {
             listUnsubscribe: /^list-unsubscribe:/im.test(hdr),
             bulk: /^precedence:\s*(bulk|list|junk)/im.test(hdr),
             automated: /^auto-submitted:\s*(?!no\b)\S/im.test(hdr)
-          })
+          }),
+          newsletter: newsletterFrom(hdr, from.email, subject, isReplyHeaders(hdr, env?.inReplyTo))
         }
       })
       .sort((a, b) => b.date.localeCompare(a.date))
@@ -1911,6 +1963,112 @@ export class MailService {
       }
     }
     if (done.size) this.store.setSnoozed(this.store.listSnoozed().filter((s) => !done.has(s)))
+  }
+
+  // ---------- Newsletter magazine ----------
+
+  /** The account's Inbox path. */
+  inboxPath(accountId: string): string {
+    return this.inboxOf(accountId)
+  }
+
+  /** The account's Newsletters folder; made on the server (a label on Gmail) when `create` and it is missing. */
+  async newsletterPath(accountId: string, create: boolean): Promise<string | undefined> {
+    const found = await this.specialPath(accountId, 'newsletters')
+    if (found || !create) return found
+    const c = await this.client(accountId)
+    const made = (await c.mailboxCreate(NEWSLETTER_FOLDER)).path
+    await this.listMailboxes(accountId)
+    return (await this.specialPath(accountId, 'newsletters')) ?? made
+  }
+
+  /**
+   * Inbox messages after `mark`, oldest first, at most `max`, with what Newsletter magazine decides by. Without a
+   * mark, or after the server renumbered the Inbox, nothing is looked at: the mark starts at the newest message.
+   */
+  async inboxAfter(
+    accountId: string,
+    mark: { uidValidity: string; uid: number } | null,
+    max = 500
+  ): Promise<{ uidValidity: string; uid: number; items: NewsletterCandidate[] }> {
+    return this.withMailbox(accountId, this.inboxOf(accountId), async (c) => {
+      const mb = c.mailbox
+      if (!mb) throw new Error('The Inbox could not be opened.')
+      const validity = String(mb.uidValidity)
+      if (!mark || mark.uidValidity !== validity) return { uidValidity: validity, uid: Math.max(0, Number(mb.uidNext) - 1), items: [] }
+      if (!mb.exists) return { uidValidity: validity, uid: mark.uid, items: [] }
+      const found = ((await c.search({ uid: `${mark.uid + 1}:*` }, { uid: true })) || [])
+        .filter((u) => u > mark.uid)
+        .sort((a, b) => a - b)
+        .slice(0, max)
+      if (!found.length) return { uidValidity: validity, uid: mark.uid, items: [] }
+      return { uidValidity: validity, uid: found[found.length - 1]!, items: await this.candidates(c, found) }
+    })
+  }
+
+  /** The newest `n` Inbox messages with what Newsletter magazine decides by. */
+  async inboxNewest(accountId: string, n: number): Promise<{ uidValidity: string; items: NewsletterCandidate[] }> {
+    return this.withMailbox(accountId, this.inboxOf(accountId), async (c) => {
+      const mb = c.mailbox
+      if (!mb) throw new Error('The Inbox could not be opened.')
+      const validity = String(mb.uidValidity)
+      if (!mb.exists) return { uidValidity: validity, items: [] }
+      const all = ((await c.search({ all: true }, { uid: true })) || []).sort((a, b) => b - a).slice(0, n)
+      return { uidValidity: validity, items: await this.candidates(c, all) }
+    })
+  }
+
+  private async candidates(c: ImapFlow, uids: number[]): Promise<NewsletterCandidate[]> {
+    const out: NewsletterCandidate[] = []
+    for (let i = 0; i < uids.length; i += 200) {
+      const rows = await c.fetchAll(
+        uids.slice(i, i + 200).join(','),
+        { uid: true, envelope: true, internalDate: true, headers: SUMMARY_HEADERS },
+        { uid: true }
+      )
+      for (const r of rows) {
+        const hdr = r.headers?.toString() ?? ''
+        const from = toAddresses(r.envelope?.from)[0] ?? { name: '', email: '' }
+        out.push({
+          uid: r.uid,
+          from,
+          newsletter: newsletterFrom(hdr, from.email, r.envelope?.subject || '', isReplyHeaders(hdr, r.envelope?.inReplyTo)),
+          messageId: r.envelope?.messageId || undefined,
+          arrivedAt: r.internalDate ? new Date(r.internalDate).toISOString() : undefined
+        })
+      }
+    }
+    return out
+  }
+
+  /** Moves messages to Newsletters, making the folder if needed, a few hundred at a time. Returns how many moved. */
+  async moveToNewsletters(accountId: string, path: string, uids: number[], uidValidity?: string): Promise<number> {
+    if (!uids.length) return 0
+    const dest = await this.newsletterPath(accountId, true)
+    if (!dest) throw new Error('The Newsletters folder could not be made.')
+    let moved = 0
+    try {
+      for (let i = 0; i < uids.length; i += 300) {
+        const part = uids.slice(i, i + 300)
+        await this.moveTo(accountId, path, part, dest, uidValidity)
+        moved += part.length
+      }
+    } finally {
+      if (moved) {
+        this.emit({ accountId, path })
+        this.emit({ accountId, path: dest })
+      }
+    }
+    return moved
+  }
+
+  /** Moves a message back to the Inbox (Not a Newsletter). */
+  async moveToInbox(accountId: string, path: string, uids: number[], uidValidity?: string): Promise<void> {
+    const inbox = this.inboxOf(accountId)
+    if (path === inbox) return
+    await this.moveTo(accountId, path, uids, inbox, uidValidity)
+    this.emit({ accountId, path })
+    this.emit({ accountId, path: inbox })
   }
 
   // ---------- Contacts ----------

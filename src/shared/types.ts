@@ -49,6 +49,8 @@ export type SpecialUse =
   | 'flagged'
   /** WinMail's own folder for snoozed mail. */
   | 'snoozed'
+  /** Where Newsletter magazine moves Newsletters (a label on Gmail). */
+  | 'newsletters'
 
 export interface MailboxInfo {
   path: string
@@ -121,6 +123,27 @@ export interface MessageSummary {
    * Missing on rows saved before WinMail read labels; they arrive with the folder's next full flag read.
    */
   labels?: string[]
+  /**
+   * Its headers look like a Newsletter (List-Unsubscribe, not a discussion list, reply, receipt or social
+   * notification). Sender rules, VIPs and own mail are applied on top (shared/newsletters.ts `isNewsletter`).
+   */
+  newsletter?: boolean
+}
+
+/** A sender the user decided about: always or never a Newsletter. */
+export interface NewsletterRuleEntry {
+  /** Lower case. */
+  email: string
+  name?: string
+  rule: 'always' | 'never'
+}
+
+/** A message to act on, as the window knows it. */
+export interface MessageRef {
+  accountId: string
+  mailbox: string
+  uid: number
+  uidValidity?: string
 }
 
 /** Inbox category tabs: Gmail's own on Google accounts, worked out by WinMail elsewhere. */
@@ -488,6 +511,14 @@ export interface Settings {
   brief: boolean
   /** Announce the Morning brief (the day's first Delivery) when WinMail is in the background. */
   morningBriefNotify: boolean
+  /** Newsletter magazine: move Newsletters out of the Inbox on the server and read them as issues. */
+  newsletters: boolean
+  /** One Magazine issue a day or a week. */
+  magazinePeriod: 'day' | 'week'
+  /** Weekly issues start on this day: 0 Sunday … 6 Saturday. */
+  magazineWeekday: number
+  /** Senders that are always or never Newsletters, newest first. */
+  newsletterRules: NewsletterRuleEntry[]
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -519,7 +550,11 @@ export const DEFAULT_SETTINGS: Settings = {
   deliveryTimes: ['09:00', '13:00', '17:00'],
   vips: [],
   brief: true,
-  morningBriefNotify: true
+  morningBriefNotify: true,
+  newsletters: false,
+  magazinePeriod: 'day',
+  magazineWeekday: 1,
+  newsletterRules: []
 }
 
 export interface TestResult {
@@ -666,6 +701,18 @@ export interface WinMailApi {
   briefSummary(recordId: string): Promise<string>
   /** The Morning brief notification was clicked: show All Inboxes with the Brief. */
   onShowBrief(cb: () => void): () => void
+
+  /** Newsletter magazine: how many Newsletters are already in the Inboxes (the newest 2,000 messages of each). */
+  countInboxNewsletters(): Promise<number>
+  /** Moves the Newsletters already in the Inboxes to Newsletters; returns how many moved. */
+  moveInboxNewsletters(): Promise<number>
+  /**
+   * Saves (or with null removes) a sender rule. With `message`, also moves it: "never" back to the Inbox, "always"
+   * to Newsletters.
+   */
+  setNewsletterRule(sender: Address, rule: 'always' | 'never' | null, message?: MessageRef): Promise<void>
+  /** Newsletters were moved, or the feature or its rules changed. */
+  onNewslettersChanged(cb: () => void): () => void
 
   /** Whether a Claude API key is saved. */
   aiAvailable(): Promise<boolean>

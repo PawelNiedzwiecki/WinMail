@@ -1,0 +1,189 @@
+/* ---------- Magazine (Newsletter magazine's contents page) ---------- */
+
+.mag-kicker {
+  display: block;
+  margin-bottom: 1px;
+  font-size: 10.5px;
+  font-weight: 650;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-3);
+}
+
+.mag-nav {
+  flex-shrink: 0;
+  display: flex;
+  gap: 2px;
+  align-self: flex-end;
+}
+.mag-nav-btn {
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  border-radius: 7px;
+  color: var(--text-2);
+  transition: background var(--dur-1) ease, color var(--dur-1) ease;
+}
+.mag-nav-btn:hover:not(:disabled) {
+  background: var(--hover);
+  color: var(--text);
+}
+.mag-nav-btn:disabled {
+  color: var(--text-3);
+  opacity: 0.5;
+}
+.mag-nav-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.mag-scroll {
+  padding: 10px 10px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.mag-card {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  width: 100%;
+  padding: 12px 14px 13px;
+  border-radius: 10px;
+  text-align: left;
+  background: var(--surface-alt);
+  border: 1px solid var(--hairline);
+  transition: background var(--dur-1) ease, border-color var(--dur-1) ease, box-shadow var(--dur-1) ease;
+}
+.mag-card:hover {
+  border-color: color-mix(in srgb, var(--text) 18%, transparent);
+}
+.mag-card.is-selected {
+  background: color-mix(in srgb, var(--accent) 9%, var(--surface));
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
+}
+.mag-card:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.mag-masthead {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.mag-mark {
+  flex-shrink: 0;
+  width: 20px;
+  height: 20px;
+  display: grid;
+  place-items: center;
+  border-radius: 5px;
+  font-size: 11px;
+  font-weight: 700;
+  color: #fff;
+}
+.mag-sender {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  color: var(--text-2);
+}
+.mag-card .unread-dot {
+  flex-shrink: 0;
+  width: 7px;
+  height: 7px;
+}
+.mag-time {
+  flex-shrink: 0;
+  font-size: 11px;
+  color: var(--text-3);
+}
+
+/* The headline: what the newsletter is about this time. */
+.mag-title {
+  font-size: 14.5px;
+  font-weight: 500;
+  line-height: 1.3;
+  letter-spacing: -0.005em;
+  color: var(--text);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.mag-card.is-unread .mag-title {
+  font-weight: 650;
+}
+.mag-preview {
+  font-size: 12.5px;
+  line-height: 1.45;
+  color: var(--text-2);
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.mag-account {
+  margin-left: 0;
+  padding-left: 0;
+}
+
+.mag-empty {
+  padding: 48px 18px;
+  text-align: center;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--text-2);
+}
+.mag-empty p {
+  margin: 0;
+}
+.mag-empty-title {
+  margin-bottom: 4px !important;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+/* Placeholder cards, the same size as real ones. */
+.skel-card {
+  gap: 8px;
+}
+.skel-card .skel-line {
+  height: 10px;
+}
+.skel-card .mag-masthead .skel-line {
+  height: 9px;
+}
+.skel-card .skel-title {
+  height: 14px;
+  margin: 1px 0 2px;
+}
+.skel-mark {
+  background: var(--input-bg);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mag-card,
+  .mag-nav-btn {
+    transition: none;
+  }
+}
+
+/* Settings > Magazine: the count being worked out. */
+.mg-count-skel {
+  display: block;
+  width: 96px;
+  height: 26px;
+  border-radius: 7px;
+}

@@ -11,6 +11,7 @@ import {
   MailCheck,
   MailOpen,
   MessagesSquare,
+  Newspaper,
   Printer,
   Reply,
   ReplyAll,
@@ -52,9 +53,11 @@ import {
 import { optedIn } from '@shared/contentFeatures'
 import { categorize } from '@shared/categorize'
 import { advance, isHeld, isVip, vipAddresses, type HoldRule } from '@shared/delivery'
+import { groupIssues } from '@shared/newsletters'
 import { api } from './api'
 import { Sidebar, inboxPath, type Selection } from './components/Sidebar'
 import { MessageList } from './components/MessageList'
+import { MagazineContents } from './components/MagazineContents'
 import { MessageView, type AiSummaryState } from './components/MessageView'
 import { Toolbar } from './components/Toolbar'
 import { AiSearchBar } from './components/AiSearchBar'
@@ -106,6 +109,13 @@ const showError = (e: unknown) => toast({ text: errMsg(e), tone: 'error' })
 
 /** Messages fetched per mailbox per page. */
 const PAGE = 60
+/** Newsletters fetched per account for the Magazine: a few weeks of issues. */
+const MAGAZINE_MAX = 200
+
+/** An account's Newsletters folder (Newsletter magazine), if it has one yet. */
+function newsletterPath(boxes: MailboxInfo[] | undefined): string | undefined {
+  return boxes?.find((b) => b.specialUse === 'newsletters')?.path
+}
 /** Server search waits this long after the last keystroke. */
 const SEARCH_DELAY_MS = 400
 
@@ -203,7 +213,9 @@ function dismissedBrief(): string | null {
 
 /** A folder's UIDs were renumbered: nothing remembered about its messages can be trusted. */
 function forgetFolder(accountId: string, path: string) {
-  for (const k of [...listCache.keys()]) if (k.startsWith(`${accountId}/${path}|`) || k.startsWith('all:')) listCache.delete(k)
+  for (const k of [...listCache.keys()]) {
+    if (k.startsWith(`${accountId}/${path}|`) || k.startsWith('all:') || k.startsWith('magazine:')) listCache.delete(k)
+  }
   for (const k of [...detailCache.keys()]) if (k.startsWith(`${accountId}|${path}|`)) detailCache.delete(k)
 }
 
@@ -214,7 +226,7 @@ function listKeyOf(sel: Selection, list: Account[], cat: GmailCategory | null): 
       ? `${sel.accountId}/${sel.path}`
       : sel.kind === 'label'
         ? `label:${sel.accountId}/${sel.id}`
-        : `all:${list.filter((a) => a.enabled).map((a) => a.id).join(',')}`
+        : `${sel.kind === 'magazine' ? 'magazine' : 'all'}:${list.filter((a) => a.enabled).map((a) => a.id).join(',')}`
   return `${where}|${cat ?? ''}`
 }
 
@@ -428,6 +440,14 @@ export default function App() {
       }
       // A label view is a search across folders; nothing of it is saved.
       if (sel.kind === 'label') return null
+      if (sel.kind === 'magazine') {
+        const targets = list.filter((a) => a.enabled && newsletterPath(boxes[a.id]))
+        const got = await Promise.all(targets.map((a) => cachedBox(a, newsletterPath(boxes[a.id])!, MAGAZINE_MAX, null)))
+        if (got.some((g) => !g)) return null
+        const byAccount: Record<string, MessageSummary[]> = {}
+        targets.forEach((a, i) => (byAccount[a.id] = got[i]!.items))
+        return { result: Object.values(byAccount).flat().sort((a, b) => b.date.localeCompare(a.date)), more: false, byAccount }
+      }
       const targets = list.filter((a) => a.enabled)
       const got = await Promise.all(targets.map((a) => cachedBox(a, inboxPath(boxes[a.id]), max, cat)))
       if (!targets.length || got.some((g) => !g)) return null
@@ -503,6 +523,19 @@ export default function App() {
         } else if (sel.kind === 'label') {
           result = await api.searchQuery(sel.accountId, inboxPath(boxes[sel.accountId]), labelQuery(sel.id), max)
           more = result.length >= max
+        } else if (sel.kind === 'magazine') {
+          // Every account's Newsletters folder; an account without one has no Newsletters yet.
+          const targets = list.filter((a) => a.enabled && newsletterPath(boxes[a.id]))
+          const settled = await Promise.allSettled(targets.map((a) => fetchBox(a, newsletterPath(boxes[a.id])!, MAGAZINE_MAX, null)))
+          result = settled.flatMap((s, i) => {
+            if (s.status === 'fulfilled') return s.value.items
+            const a = targets[i]!
+            errors.push(`${a.description}: ${errMsg(s.reason)}`)
+            if (!keepRows) return []
+            const path = newsletterPath(boxes[a.id])
+            return painted?.[a.id] ?? latest.current.messages.filter((m) => m.accountId === a.id && m.mailbox === path)
+          })
+          result.sort((a, b) => b.date.localeCompare(a.date))
         } else {
           const got = await fetchBox(list.find((a) => a.id === sel.accountId), sel.path, max, cat, sel.accountId)
           result = dropHeld(got.items, boxes)
@@ -632,6 +665,8 @@ export default function App() {
   // Reload list when selection or account set changes
   const enabledKey = enabled.map((a) => a.id).join(',')
   const inboxKey = enabled.map((a) => inboxPath(mailboxes[a.id])).join(',')
+  // The Magazine reloads when an account's Newsletters folder appears.
+  const newsKey = selection.kind === 'magazine' ? enabled.map((a) => newsletterPath(mailboxes[a.id]) ?? '').join(',') : ''
   useEffect(() => {
     if (!ready) return
     setSelectedKey(null)
@@ -653,7 +688,7 @@ export default function App() {
     setLimit(PAGE)
     loadMessages(selection, accounts, mailboxes, false, PAGE, category, true)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ready, selection, enabledKey, inboxKey, category])
+  }, [ready, selection, enabledKey, inboxKey, newsKey, category])
 
   // Moves, flag changes and refreshes all go through `messages`, so the cache follows them.
   useEffect(() => {
@@ -761,7 +796,11 @@ export default function App() {
       const targets =
         sel.kind === 'mailbox'
           ? [{ accountId: sel.accountId, path: sel.path }]
-          : list.filter((a) => a.enabled).map((a) => ({ accountId: a.id, path: inboxPath(boxes[a.id]) }))
+          : sel.kind === 'magazine'
+            ? list
+                .filter((a) => a.enabled && newsletterPath(boxes[a.id]))
+                .map((a) => ({ accountId: a.id, path: newsletterPath(boxes[a.id])! }))
+            : list.filter((a) => a.enabled).map((a) => ({ accountId: a.id, path: inboxPath(boxes[a.id]) }))
       setSearching(true)
       const settled = await Promise.allSettled(targets.map((x) => api.search(x.accountId, x.path, q, PAGE)))
       if (req !== searchReq.current) return
@@ -792,7 +831,11 @@ export default function App() {
         ? [{ accountId: sel.accountId, path: sel.path, query: aiSearch.query }]
         : sel.kind === 'label'
           ? [{ accountId: sel.accountId, path: inboxPath(boxes[sel.accountId]), query: labelQuery(sel.id, aiSearch.query) }]
-          : list.filter((a) => a.enabled).map((a) => ({ accountId: a.id, path: inboxPath(boxes[a.id]), query: aiSearch.query }))
+          : sel.kind === 'magazine'
+            ? list
+                .filter((a) => a.enabled && newsletterPath(boxes[a.id]))
+                .map((a) => ({ accountId: a.id, path: newsletterPath(boxes[a.id])!, query: aiSearch.query }))
+            : list.filter((a) => a.enabled).map((a) => ({ accountId: a.id, path: inboxPath(boxes[a.id]), query: aiSearch.query }))
     setSearching(true)
     void Promise.allSettled(targets.map((x) => api.searchQuery(x.accountId, x.path, x.query, PAGE))).then((settled) => {
       if (req !== searchReq.current) return
@@ -953,6 +996,50 @@ export default function App() {
       : [{ label: `Add ${first} to VIPs`, icon: <UserPlus size={14} />, onSelect: () => toggleVip(m.from) }]
   }
 
+  // Newsletter magazine: Newsletters were moved, or the feature or its sender rules changed.
+  useEffect(
+    () =>
+      api.onNewslettersChanged(() => {
+        void api.getSettings().then(setSettings, () => {})
+        void refresh(true)
+      }),
+    [refresh]
+  )
+  // Turned off while the Magazine is open: back to the Inbox.
+  useEffect(() => {
+    if (!settings.newsletters && selection.kind === 'magazine') select({ kind: 'all-inboxes' })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [settings.newsletters, selection.kind])
+
+  const isNewsletterBox = (m: MessageSummary) =>
+    mailboxes[m.accountId]?.find((b) => b.path === m.mailbox)?.specialUse === 'newsletters'
+  /** "Not a Newsletter" moves a message back to the Inbox; "Always a Newsletter" moves it out. Both remember the sender. */
+  const newsletterRule = async (m: MessageSummary, rule: 'always' | 'never') => {
+    const name = m.from.name || m.from.email
+    try {
+      await api.setNewsletterRule(m.from, rule, { accountId: m.accountId, mailbox: m.mailbox, uid: m.uid, uidValidity: m.uidValidity })
+      mapLists((list) => list.filter((x) => x.key !== m.key))
+      if (selectedKey === m.key) setSelectedKey(null)
+      toast(
+        rule === 'never'
+          ? `Moved to the Inbox. Mail from ${name} will stay there.`
+          : `Moved to the Magazine. Mail from ${name} will go there too.`
+      )
+    } catch (e) {
+      showError(e)
+    }
+  }
+  const newsletterItems = (m: MessageSummary | null | undefined): MenuItem[] => {
+    if (!m || !m.from.email || hold.own.includes(m.from.email.trim().toLowerCase())) return []
+    if (isNewsletterBox(m)) {
+      return [{ label: 'Not a Newsletter', icon: <Inbox size={14} />, onSelect: () => void newsletterRule(m, 'never') }]
+    }
+    if (settings.newsletters && m.mailbox === inboxPath(mailboxes[m.accountId])) {
+      return [{ label: 'Always a Newsletter', icon: <Newspaper size={14} />, onSelect: () => void newsletterRule(m, 'always') }]
+    }
+    return []
+  }
+
   // Periodic check
   useEffect(() => {
     if (!settings.checkIntervalMin || !enabled.length) return
@@ -999,17 +1086,37 @@ export default function App() {
     )
   }, [messages, query, searchResults, aiMode, aiSearch])
 
+  // The Magazine shows one issue at a time; each newsletter is its own article, never grouped into a conversation.
+  const magazine = selection.kind === 'magazine'
+  const grouping = settings.conversations && !magazine
+  const issues = useMemo(
+    () => (magazine ? groupIssues(visible, settings.magazinePeriod, settings.magazineWeekday) : []),
+    [magazine, visible, settings.magazinePeriod, settings.magazineWeekday]
+  )
+  const [issueKey, setIssueKey] = useState<string | null>(null)
+  const issueIndex = Math.max(0, issues.findIndex((g) => g.issue.key === issueKey))
+  const showIssue = (index: number) => {
+    const g = issues[index]
+    if (!g) return
+    setIssueKey(g.issue.key)
+    setSelectedKey(null)
+    setChecked(new Set())
+  }
+  // Opening the Magazine, or changing how often it comes out, starts at the newest issue.
+  useEffect(() => setIssueKey(null), [magazine, settings.magazinePeriod, settings.magazineWeekday])
+
   /** Conversations, when grouping is on; each message key maps to its conversation. */
   const threads = useMemo(() => {
     const map = new Map<string, Thread>()
-    if (!settings.conversations) return map
+    if (!grouping) return map
     for (const t of groupThreads(visible)) for (const m of t.members) map.set(m.key, t)
     return map
-  }, [visible, settings.conversations])
+  }, [visible, grouping])
 
   /** One row per conversation: the newest message, unread while any message is, flagged while any is. */
   const threadRows = useMemo(() => {
-    if (!settings.conversations) return visible
+    if (magazine) return issues[issueIndex]?.items ?? []
+    if (!grouping) return visible
     return visible.flatMap((m) => {
       const t = threads.get(m.key)
       if (!t || t.members.length === 1) return [m]
@@ -1017,7 +1124,7 @@ export default function App() {
       const labels = [...new Set(t.members.flatMap((x) => x.labels ?? []))].sort()
       return [{ ...m, seen: t.members.every((x) => x.seen), flagged: t.members.some((x) => x.flagged), labels }]
     })
-  }, [visible, threads, settings.conversations])
+  }, [visible, threads, grouping, magazine, issues, issueIndex])
 
   /** What the list shows (folder, category, search); when it changes, rows swap without animating. */
   const listView = [
@@ -1025,7 +1132,9 @@ export default function App() {
       ? `${selection.accountId}/${selection.path}`
       : selection.kind === 'label'
         ? `label:${selection.accountId}/${selection.id}`
-        : 'all',
+        : selection.kind === 'magazine'
+          ? `magazine:${issues[issueIndex]?.issue.key ?? ''}`
+          : 'all',
     category ?? '',
     query.trim(),
     searchResults ? 'server' : '',
@@ -1441,7 +1550,7 @@ export default function App() {
   const askSnooze =(items = targets()) => items.length && setDialog({ kind: 'snooze', items })
 
   const defaultAccountId = () => {
-    if (selection.kind !== 'all-inboxes') return selection.accountId
+    if (selection.kind === 'mailbox' || selection.kind === 'label') return selection.accountId
     return enabled[0]?.id ?? ''
   }
 
@@ -1577,7 +1686,8 @@ export default function App() {
       ? [{ label: 'Labels…', icon: <Tag size={14} />, shortcut: settings.gmailShortcuts ? 'L' : undefined, onSelect: () => askLabels() }]
       : []),
     { label: 'Snooze…', icon: <AlarmClock size={14} />, shortcut: settings.gmailShortcuts ? 'B' : undefined, onSelect: () => askSnooze() },
-    ...vipItem(selected)
+    ...vipItem(selected),
+    ...newsletterItems(selected)
   ]
 
   const accountsChanged = async () => {
@@ -1651,7 +1761,9 @@ export default function App() {
       { label: 'Snooze…', icon: <AlarmClock size={14} />, onSelect: () => askSnooze(items) },
       { label: 'Move to Junk', icon: <ShieldAlert size={14} />, onSelect: () => moveMessages(items, 'junk') },
       { label: 'Delete', icon: <Trash2 size={14} />, shortcut: 'Del', danger: true, onSelect: () => askTrash(items) },
-      ...(single && vipItem(m).length ? (['separator', ...vipItem(m)] as MenuItem[]) : [])
+      ...(single && vipItem(m).length + newsletterItems(m).length
+        ? (['separator', ...vipItem(m), ...newsletterItems(m)] as MenuItem[])
+        : [])
     ]
   }
   const menuMessage = menu ? visible.find((m) => m.key === menu.key) : undefined
@@ -1832,10 +1944,13 @@ export default function App() {
       ? enabled.length > 1
         ? 'All Inboxes'
         : 'Inbox'
-      : selection.kind === 'label'
-        ? labelName(selection.accountId, selection.id)
-        : (src(selection)?.name ?? selection.path)
-  const subtitle = selection.kind !== 'all-inboxes' ? accountById[selection.accountId]?.description : undefined
+      : selection.kind === 'magazine'
+        ? 'Magazine'
+        : selection.kind === 'label'
+          ? labelName(selection.accountId, selection.id)
+          : (src(selection)?.name ?? selection.path)
+  const subtitle =
+    selection.kind === 'mailbox' || selection.kind === 'label' ? accountById[selection.accountId]?.description : undefined
   // The label the list is about isn't repeated on every row.
   const hideLabel =
     selection.kind === 'label'
@@ -1849,7 +1964,7 @@ export default function App() {
   const canLabelSelected = !!selected && !multi && !!labelSets[selected.accountId] && labelSupport(selected.accountId) !== 'none'
   const anyLabels = enabled.some((a) => labelSupport(a.id) !== undefined && labelSupport(a.id) !== 'none')
   const labels =
-    selection.kind === 'all-inboxes' && enabled.length > 1
+    (selection.kind === 'all-inboxes' || selection.kind === 'magazine') && enabled.length > 1
       ? Object.fromEntries(enabled.map((a) => [a.id, a.description]))
       : undefined
 
@@ -1916,6 +2031,7 @@ export default function App() {
         waitingCount={waiting.length}
         nudgedCount={waiting.filter((w) => w.nudgedAt).length}
         onOpenWaiting={() => setDialog({ kind: 'waiting' })}
+        magazine={settings.newsletters}
         onMailboxMenu={(accountId, path, x, y) => setBoxMenu({ accountId, path, x, y })}
         labelSets={labelSets}
       />
@@ -1938,6 +2054,26 @@ export default function App() {
           <Welcome onAddAccount={() => setAdding(true)} />
         ) : (
           <div className="panes">
+            {magazine ? (
+              <MagazineContents
+                issues={issues}
+                index={issueIndex}
+                onIssue={showIssue}
+                selectedKey={selectedKey}
+                checkedKeys={checked}
+                loading={!ready || listLoading || (!!aiSearch && !searchResults)}
+                switching={listSwitching}
+                status={status}
+                error={listError}
+                accountLabels={labels}
+                onSelect={onSelectRow}
+                onOpen={(key) => {
+                  const m = visible.find((x) => x.key === key)
+                  if (m) api.openMessageWindow(m).catch(showError)
+                }}
+                onContextMenu={(key, x, y) => setMenu({ key, x, y })}
+              />
+            ) : (
             <MessageList
               previewLines={settings.listPreviewLines || 2}
               density={settings.listDensity}
@@ -2005,6 +2141,7 @@ export default function App() {
                 loadMessages(selection, accounts, mailboxes, false, next, category)
               }}
             />
+            )}
             <Resizer width={listW} onResize={setListW} onReset={resetListW} label="Resize message list" />
             <div className="reader">
             <ActionBar

@@ -20,6 +20,7 @@ import { Outbox } from './outbox'
 import { Notifier } from './notifications'
 import { WaitingFor } from './waiting'
 import { Deliveries } from './delivery'
+import { Newsletters } from './newsletters'
 import { isHeld } from '../shared/delivery'
 import { cleanTemp } from './attachments'
 import { loadWindowState, trackWindowState } from './windowState'
@@ -428,6 +429,8 @@ if (!app.requestSingleInstanceLock()) {
       (record) => notifier?.delivered(record)
     )
     mailService.holdBy(() => deliveries.rule())
+    const newsletters = new Newsletters(store, mailService, () => send('newsletters:changed'))
+    mailService.watchInbox((accountId) => void newsletters.sweep(accountId))
     const waiting = new WaitingFor(
       store,
       mailService,
@@ -462,11 +465,11 @@ if (!app.requestSingleInstanceLock()) {
         }
       },
       // Announced mail is all Inbox mail.
-      held: (m) => isHeld(m, deliveries.rule()),
+      held: (m) => isHeld(m, deliveries.rule()) || newsletters.willMove(m),
       showBrief
     })
     setMenu()
-    registerIpc(store, mailService, contacts, queue, mailCache, waiting, deliveries)
+    registerIpc(store, mailService, contacts, queue, mailCache, waiting, deliveries, newsletters)
     ipcMain.on('app:close-ready', (e) => {
       const w = BrowserWindow.fromWebContents(e.sender)
       if (!w) return
@@ -481,6 +484,8 @@ if (!app.requestSingleInstanceLock()) {
       void queue.sendDue()
       void waiting.check()
       void deliveries.tick()
+      // The first run, after the first mailbox load, also moves what came while WinMail was closed.
+      void newsletters.tick()
     }
     setTimeout(tick, CONTACTS_SCAN_DELAY_MS)
     setInterval(tick, TIMER_MS)
