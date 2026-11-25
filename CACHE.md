@@ -63,6 +63,12 @@ Update this file at the end of every step.
 - The UIDVALIDITY each draft UID was handed out under (from `saveDraft` and `openDraft`) is now stored in a `drafts` table in `mail-cache.db` instead of a Map in `MailService`, so a draft restored from the recovery copy after a relaunch is still refused for deletion if the Drafts folder was renumbered meanwhile. Schema version 2; a version-1 file is upgraded in place (the new table is added, nothing is lost). Cleared with the account, pruned for unknown accounts, and dropped once the draft is removed.
 - Checked with a script: v1 → v2 upgrade keeps data, values survive close/reopen, forget/prune/forgetAccount.
 
+### 2026-11-25 — Schema 4: list headers out of saved parents (#69)
+- Summaries saved before #69 have List-Id and List-Unsubscribe values in `parents`, which grouped newsletters into conversations and made them look like replies. Opening a version-3 file removes every parent without an `@` (List-Id) or starting with `<mailto:`/`<http` (List-Unsubscribe) and deletes the saved `views` (Gmail category tabs), which are read again. Nothing else is fetched again.
+- The migration steps are now gated per version (`< 2` drafts, `< 3` labels, then the parents cleanup), so a version-3 file no longer runs the labels ALTER.
+- Not cleaned: Briefs already in the Delivery history keep their items as they were.
+- `src/main/cache.test.ts` checks the v3 → v4 upgrade.
+
 ## Open questions / to verify
 - With a real Gmail and a non-Gmail account: that `messageFlagsAdd` returns `true` on success on both (setFlags now relies on it).
 - Whether any server returns `uidValidity` in a MOVE result without `uidMap` (handled: bodies are then simply not re-keyed).

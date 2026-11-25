@@ -21,6 +21,14 @@ export function parentIds(hdr: string, inReplyTo: string | undefined): string[] 
   return [...new Set([...referenceIds(hdr), ...messageIds(inReplyTo)])]
 }
 
+/**
+ * Whether `<…>` can be a Message-ID: it has an `@` (a List-Id never does) and is not a List-Unsubscribe link.
+ * Only for summaries saved before #69, which took every `<…>` in the headers as a parent.
+ */
+export function isMessageId(id: string): boolean {
+  return id.includes('@') && !/^<(mailto|https?):/i.test(id)
+}
+
 /** In-Reply-To or References name another message. */
 export function isReplyHeaders(hdr: string, inReplyTo: string | undefined): boolean {
   return parentIds(hdr, inReplyTo).length > 0

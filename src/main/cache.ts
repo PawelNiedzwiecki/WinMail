@@ -3,9 +3,10 @@ import { DatabaseSync, type StatementSync } from 'node:sqlite'
 import { existsSync, rmSync, statSync, writeFileSync } from 'fs'
 import { join } from 'path'
 import type { MailboxInfo, MessageDetail, MessageSummary } from '../shared/types'
+import { isMessageId } from './headers'
 
 /** Bumped when the tables change; an older file is rebuilt, a newer one is thrown away. */
-const SCHEMA_VERSION = 3
+const SCHEMA_VERSION = 4
 
 /** Opened messages larger than this (inline images make some huge) are not kept. */
 export const BODY_MAX_BYTES = 5_000_000
@@ -154,13 +155,17 @@ export class MailCache {
     if (version === SCHEMA_VERSION) return
     db.exec('BEGIN')
     try {
-      // Version 1 has everything but the drafts table; version 2 everything but messages.labels.
+      // Version 1 has everything but the drafts table; version 2 everything but messages.labels;
+      // version 3 has List-Id and List-Unsubscribe values among the saved parents.
       if (version === 0) db.exec(SCHEMA + DRAFTS)
       else {
         if (version < 2) db.exec(DRAFTS)
-        db.exec(LABELS)
-        // Saved rows have no labels yet: the next sync of every folder reads all flags (and labels) again.
-        db.exec('UPDATE folders SET modseq = NULL')
+        if (version < 3) {
+          db.exec(LABELS)
+          // Saved rows have no labels yet: the next sync of every folder reads all flags (and labels) again.
+          db.exec('UPDATE folders SET modseq = NULL')
+        }
+        MailCache.cleanParents(db)
       }
       db.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`)
       db.exec('COMMIT')
@@ -168,6 +173,22 @@ export class MailCache {
       db.exec('ROLLBACK')
       throw err
     }
+  }
+
+  /** Drops the list header values older versions saved as parents (#69). Saved searches are read again instead. */
+  private static cleanParents(db: DatabaseSync): void {
+    const rows = db.prepare(`SELECT rowid, summary FROM messages WHERE summary LIKE '%"parents":[%<%'`).all() as {
+      rowid: number
+      summary: string
+    }[]
+    const update = db.prepare('UPDATE messages SET summary = ? WHERE rowid = ?')
+    for (const r of rows) {
+      const s = JSON.parse(r.summary) as MessageSummary
+      const parents = s.parents?.filter(isMessageId)
+      if (!parents || parents.length === s.parents!.length) continue
+      update.run(JSON.stringify({ ...s, parents }), r.rowid)
+    }
+    db.exec('DELETE FROM views')
   }
 
   private deleteFiles(): void {
