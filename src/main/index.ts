@@ -21,6 +21,7 @@ import { Notifier } from './notifications'
 import { WaitingFor } from './waiting'
 import { Deliveries } from './delivery'
 import { Newsletters } from './newsletters'
+import { Unsubscriber } from './unsubscribe'
 import { isHeld } from '../shared/delivery'
 import { cleanTemp } from './attachments'
 import { loadWindowState, trackWindowState } from './windowState'
@@ -469,7 +470,7 @@ if (!app.requestSingleInstanceLock()) {
       showBrief
     })
     setMenu()
-    registerIpc(store, mailService, contacts, queue, mailCache, waiting, deliveries, newsletters)
+    registerIpc(store, mailService, contacts, queue, mailCache, waiting, deliveries, newsletters, new Unsubscriber(store, mailService))
     ipcMain.on('app:close-ready', (e) => {
       const w = BrowserWindow.fromWebContents(e.sender)
       if (!w) return

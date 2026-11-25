@@ -9,6 +9,8 @@ import { Group, Item, Segmented, Switch } from './controls'
 interface Props {
   settings: Settings
   onChange: (s: Settings) => void
+  /** Opens the Unsubscribe audit (closing Settings). */
+  onOpenAudit: () => void
 }
 
 const WEEKDAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']
@@ -21,7 +23,7 @@ type Existing =
   | { state: 'moved'; count: number }
   | { state: 'failed'; error: string }
 
-export function MagazinePage({ settings, onChange }: Props) {
+export function MagazinePage({ settings, onChange, onOpenAudit }: Props) {
   const set = (patch: Partial<Settings>) => onChange({ ...settings, ...patch })
   const on = settings.newsletters
   const [existing, setExisting] = useState<Existing | null>(null)
@@ -127,6 +129,17 @@ export function MagazinePage({ settings, onChange }: Props) {
           </Item>
         </Group>
       )}
+
+      <Group title="Unsubscribe audit">
+        <Item
+          title="Lists you never read"
+          description="Every mailing list of the last 90 days, ranked by how much of it you open. Leave several in one go. Works whether the Magazine is on or off."
+        >
+          <button className="btn" onClick={onOpenAudit}>
+            Open
+          </button>
+        </Item>
+      </Group>
 
       <Group title="Senders">
         <Item title="Always a newsletter" description="Their mail goes to the Magazine, whatever it looks like." stack>

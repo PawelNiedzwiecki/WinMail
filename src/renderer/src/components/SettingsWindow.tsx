@@ -58,6 +58,8 @@ interface Props {
   onSettings: (s: Settings) => void
   labelSets: Record<string, AccountLabels>
   onLabelsChanged: (accountId: string) => Promise<void> | void
+  /** Opens the Unsubscribe audit dialog. */
+  onOpenAudit: () => void
 }
 
 const PAGES: { id: SettingsTab; label: string; icon: LucideIcon }[] = [
@@ -107,7 +109,7 @@ export function SettingsWindow(p: Props) {
               <NotificationsPage settings={p.settings} accounts={p.accounts} onChange={p.onSettings} />
             )}
             {page.id === 'delivery' && <DeliveryPage settings={p.settings} accounts={p.accounts} onChange={p.onSettings} />}
-            {page.id === 'magazine' && <MagazinePage settings={p.settings} onChange={p.onSettings} />}
+            {page.id === 'magazine' && <MagazinePage settings={p.settings} onChange={p.onSettings} onOpenAudit={p.onOpenAudit} />}
             {page.id === 'composing' && (
               <ComposingPage settings={p.settings} onChange={p.onSettings} onAccounts={() => p.onTab('accounts')} />
             )}

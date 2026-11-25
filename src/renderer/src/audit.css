@@ -1,0 +1,217 @@
+/* ---------- Unsubscribe audit ---------- */
+
+.dialog-audit {
+  width: 720px;
+  height: min(640px, calc(100vh - 80px));
+}
+.dialog-audit .dialog-title {
+  padding: 16px 20px 4px;
+  font-size: 16px;
+}
+.dialog-audit .dialog-body {
+  display: flex;
+  flex-direction: column;
+  padding: 0 12px 8px;
+  overflow: hidden;
+}
+.dialog-audit .dialog-footer {
+  padding: 12px 20px 14px;
+}
+
+.au-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 2px 8px 10px;
+}
+.au-intro {
+  flex: 1;
+  margin: 0;
+  font-size: 13px;
+  color: var(--text-2);
+}
+.au-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.btn.au-small {
+  height: 24px;
+  padding: 0 10px;
+  font-size: 12px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.au-error {
+  margin: 0 8px 8px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  font-size: 12px;
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 8%, transparent);
+}
+
+.au-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  border-top: 1px solid var(--hairline);
+}
+
+.au-row {
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr) 180px 112px;
+  align-items: center;
+  gap: 4px 12px;
+  padding: 9px 8px;
+  border-bottom: 1px solid var(--hairline);
+}
+.au-row.is-picked {
+  background: color-mix(in srgb, var(--accent) 7%, transparent);
+}
+.au-row.is-left .au-who,
+.au-row.is-left .au-stats {
+  opacity: 0.55;
+}
+.au-check {
+  width: 15px;
+  height: 15px;
+  margin: 0;
+  accent-color: var(--accent);
+}
+.au-who {
+  min-width: 0;
+}
+.au-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+  font-weight: 600;
+}
+.au-addr {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11.5px;
+  color: var(--text-2);
+}
+
+.au-stats {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+/* How much of the list's mail was opened: an empty bar reads "never". */
+.au-meter {
+  height: 4px;
+  border-radius: 2px;
+  background: var(--input-bg);
+  overflow: hidden;
+}
+.au-meter span {
+  display: block;
+  height: 100%;
+  min-width: 0;
+  border-radius: 2px;
+  background: var(--accent);
+}
+.au-count {
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.au-muted {
+  color: var(--text-2);
+  font-size: 11.5px;
+}
+
+.au-state {
+  display: flex;
+  justify-content: flex-end;
+  font-size: 11.5px;
+}
+.au-chip {
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-size: 11px;
+  color: var(--text-2);
+  background: var(--input-bg);
+  white-space: nowrap;
+}
+.au-chip.is-warn {
+  color: var(--nudge);
+  background: color-mix(in srgb, var(--nudge) 12%, transparent);
+  font-weight: 600;
+}
+.au-done,
+.au-fail {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.au-done {
+  color: var(--success);
+}
+.au-fail {
+  color: var(--danger);
+}
+.au-row-error {
+  grid-column: 2 / -1;
+  font-size: 11.5px;
+  color: var(--danger);
+}
+
+.au-foot-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+}
+.au-bin {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-2);
+}
+.au-bin input {
+  margin: 0;
+  accent-color: var(--accent);
+}
+
+/* Placeholder rows. */
+.skel-box {
+  display: block;
+  border-radius: 4px;
+  background: var(--input-bg);
+}
+.au-row.is-skel .au-who {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.au-row.is-skel .skel-line {
+  height: 10px;
+}
+.au-skel-meter {
+  height: 4px !important;
+}
+
+@media (max-width: 760px) {
+  .au-row {
+    grid-template-columns: 22px minmax(0, 1fr) 112px;
+  }
+  .au-stats {
+    grid-column: 2;
+    grid-row: 2;
+  }
+}
+.au-state > * {
+  white-space: nowrap;
+}

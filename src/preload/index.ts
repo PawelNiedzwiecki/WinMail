@@ -106,6 +106,8 @@ const api: WinMailApi = {
   moveInboxNewsletters: () => call('newsletters:moveInbox'),
   setNewsletterRule: (sender, rule, message) => call('newsletters:rule', sender, rule, message),
   onNewslettersChanged: (cb) => on('newsletters:changed', cb),
+  scanMailingLists: () => call('audit:scan'),
+  unsubscribeLists: (keys, opts) => call('audit:unsubscribe', keys, opts),
 
   aiAvailable: () => call('ai:available'),
   setAiKey: (key) => call('ai:setKey', key),

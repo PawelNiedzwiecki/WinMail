@@ -58,6 +58,7 @@ import { api } from './api'
 import { Sidebar, inboxPath, type Selection } from './components/Sidebar'
 import { MessageList } from './components/MessageList'
 import { MagazineContents } from './components/MagazineContents'
+import { AuditDialog } from './components/AuditDialog'
 import { MessageView, type AiSummaryState } from './components/MessageView'
 import { Toolbar } from './components/Toolbar'
 import { AiSearchBar } from './components/AiSearchBar'
@@ -297,6 +298,7 @@ type Dialog =
   | { kind: 'source'; subject: string; source: string }
   | { kind: 'scheduled' }
   | { kind: 'waiting'; focusId?: string }
+  | { kind: 'audit' }
 
 /** Splits messages by the folder they are in, since IMAP acts on one folder at a time. */
 function byFolder(items: MessageSummary[]): { accountId: string; mailbox: string; uids: number[]; uidValidity?: string }[] {
@@ -2072,6 +2074,7 @@ export default function App() {
                   if (m) api.openMessageWindow(m).catch(showError)
                 }}
                 onContextMenu={(key, x, y) => setMenu({ key, x, y })}
+                onAudit={() => setDialog({ kind: 'audit' })}
               />
             ) : (
             <MessageList
@@ -2211,6 +2214,10 @@ export default function App() {
             onSettings={updateSettings}
             labelSets={labelSets}
             onLabelsChanged={labelsChanged}
+            onOpenAudit={() => {
+              setSettingsTab(null)
+              setDialog({ kind: 'audit' })
+            }}
           />
         )}
       </AnimatePresence>
@@ -2295,6 +2302,9 @@ export default function App() {
         )}
         {dialog?.kind === 'waiting' && (
           <WaitingDialog key="waiting" items={waiting} accounts={accounts} focusId={dialog.focusId} onClose={() => setDialog(null)} />
+        )}
+        {dialog?.kind === 'audit' && (
+          <AuditDialog key="audit" accounts={accounts} onClose={() => setDialog(null)} onMoved={() => void refresh(true)} />
         )}
       </AnimatePresence>
       <ToastStack />

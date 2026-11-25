@@ -4,6 +4,7 @@ import { nudgeTime } from '@shared/waiting'
 import { makeBrief } from '@shared/brief'
 import { advance, formatTime, isHeld, nextDeliveryAt, sameDay, vipAddresses, type HoldRule } from '@shared/delivery'
 import { NEWSLETTER_FOLDER, isNewsletter, ruleMap, withRule, type NewsletterRule } from '@shared/newsletters'
+import { AUDIT_DAYS, listKey, rankLists } from '@shared/unsubscribe'
 import {
   DEFAULT_SETTINGS,
   type Account,
@@ -11,6 +12,8 @@ import {
   type DeliveryRecord,
   type DeliveryState,
   type FailedSend,
+  type ListMessage,
+  type UnsubscribeResult,
   type LabelColour,
   type LabelInfo,
   type MailboxInfo,
@@ -403,6 +406,47 @@ export function createMockApi(): WinMailApi {
     const step = advance(deliveredUntil, new Date(), settings.deliveryTimes)
     if (step.crossed) deliver('scheduled', step.crossed)
   }, 30_000)
+
+  // Unsubscribe audit: the mock messages that offer a way out, plus made-up lists with a few months of mail each
+  // (name, address, messages, opened, way out, days since the last one).
+  const auditUnsubscribed: Record<string, string> = {}
+  let auditLast: ListMessage[] = []
+  const MADE_UP_LISTS: [string, string, number, number, 'one-click' | 'email' | 'web', number][] = [
+    ['Fabrikam Deals', 'deals@fabrikam.example', 48, 0, 'one-click', 1],
+    ['Tailspin Travel', 'offers@tailspin.example', 31, 0, 'email', 2],
+    ['Wide World Importers', 'news@wideworld.example', 26, 1, 'one-click', 3],
+    ['Adventure Works', 'hello@adventure-works.example', 19, 0, 'web', 4],
+    ['Litware Weekly', 'weekly@litware.example', 13, 2, 'one-click', 6],
+    ['Northwind Traders', 'promo@northwind.example', 12, 0, 'one-click', 0],
+    ['Proseware Community', 'digest@proseware.example', 22, 9, 'email', 1],
+    ['Woodgrove Bank news', 'news@woodgrove.example', 6, 1, 'one-click', 12],
+    ['Blue Yonder Airlines', 'deals@blueyonder.example', 9, 4, 'one-click', 5],
+    ['Coho Winery', 'club@cohowinery.example', 4, 3, 'web', 20]
+  ]
+  const auditMail = (): ListMessage[] => {
+    const out: ListMessage[] = []
+    for (const m of messages) {
+      if (!m.unsubscribe || boxes[m.accountId]?.find((b) => b.path === m.mailbox)?.specialUse === 'trash') continue
+      out.push({ accountId: m.accountId, mailbox: m.mailbox, uid: m.uid, uidValidity: '1', from: m.from, date: m.date,
+        seen: m.seen, messageId: m.messageId ?? undefined, unsubscribe: m.unsubscribe })
+    }
+    MADE_UP_LISTS.forEach(([name, email, total, opened, way, last], li) => {
+      const host = email.split('@')[1]!
+      const unsubscribe =
+        way === 'one-click' ? { url: `https://${host}/u`, oneClick: true }
+          : way === 'email' ? { mailto: `mailto:leave@${host}?subject=unsubscribe`, oneClick: false }
+            : { url: `https://${host}/preferences`, oneClick: false }
+      // Unsubscribed lists stop sending, except Northwind Traders, which keeps going ("Still sending" after a week).
+      const stopped = auditUnsubscribed[`from:${email}`] && email !== 'promo@northwind.example'
+      for (let i = 0; i < total; i++) {
+        const daysAgo = last + Math.floor((i * (85 - last)) / total)
+        if (stopped && daysAgo < 1) continue
+        out.push({ accountId: li % 2 ? 'icloud' : 'gmail', mailbox: 'INBOX', uid: 10_000 + li * 100 + i, uidValidity: '1',
+          from: { name, email }, date: ago(daysAgo * 24 * 60 + 30), seen: i >= total - opened, messageId: `<list${li}-${i}@mock>`, unsubscribe })
+      }
+    })
+    return out
+  }
 
   // Newsletter magazine. `?magazine` starts with it on: a Newsletters folder in each account holding a week of issues,
   // and three Newsletters still in the Inboxes for the one-time move.
@@ -979,6 +1023,38 @@ ${items.map((t) => `<h3 style="font:600 16px system-ui,sans-serif;margin:18px 0 
     onNewslettersChanged(cb) {
       newsletterListeners.add(cb)
       return () => newsletterListeners.delete(cb)
+    },
+    async scanMailingLists() {
+      await unreachable(1400)
+      const found = auditMail()
+      auditLast = found
+      return { lists: rankLists(found, accounts.map((a) => a.email), auditUnsubscribed), days: AUDIT_DAYS, errors: [] }
+    },
+    async unsubscribeLists(keys, opts) {
+      await sleep(900)
+      const ranked = new Map(rankLists(auditLast, accounts.map((a) => a.email), auditUnsubscribed).map((l) => [l.key, l]))
+      const now = new Date().toISOString()
+      return keys.map((key): UnsubscribeResult => {
+        const l = ranked.get(key)
+        if (!l) return { key, ok: false, way: null, error: 'This list is no longer in the audit. Look through your mail again.' }
+        if (l.way === 'web') return { key, ok: false, way: 'web', error: 'This list can only be left on its web page.' }
+        if (!l.way) return { key, ok: false, way: null, error: 'This list offers no way to unsubscribe.' }
+        // One list's server refuses, to show a failure.
+        if (l.address === 'deals@fabrikam.example') return { key, ok: false, way: l.way, error: "The sender's server answered 500. Try the link in the message instead." }
+        auditUnsubscribed[key] = now
+        let moved: number | undefined
+        if (opts.moveToBin) {
+          const mine = auditLast.filter((m) => listKey(m) === key)
+          moved = mine.length
+          // The real mock messages among them go to the Bin; the made-up ones are only counted.
+          for (const m of mine) {
+            const real = messages.find((x) => x.accountId === m.accountId && x.uid === m.uid)
+            const bin = boxes[m.accountId]?.find((b) => b.specialUse === 'trash')
+            if (real && bin) Object.assign(real, { mailbox: bin.path, key: `${m.accountId}|${bin.path}|${real.uid}` })
+          }
+        }
+        return { key, ok: true, way: l.way, ...(moved !== undefined ? { moved } : {}) }
+      })
     },
     onShowBrief() {
       return () => {}

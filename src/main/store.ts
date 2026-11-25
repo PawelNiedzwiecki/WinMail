@@ -78,6 +78,8 @@ interface StoreFile {
   delivery: DeliveryStore
   /** Newsletter magazine's own state. */
   newsletters: NewsletterStore
+  /** Unsubscribe audit: mailing lists WinMail unsubscribed from (list key -> ISO time), the newest 500. */
+  unsubscribed: Record<string, string>
 }
 
 /** Where Newsletter magazine has looked in an account's Inbox. */
@@ -117,7 +119,8 @@ const fresh = (): StoreFile => ({
   waiting: [],
   labels: {},
   delivery: { deliveredUntil: null, records: [] },
-  newsletters: { marks: {}, moved: [] }
+  newsletters: { marks: {}, moved: [] },
+  unsubscribed: {}
 })
 
 /** Sender rules as saved: each address once, lower case, newest first; anything without an address is dropped. */
@@ -209,7 +212,12 @@ export class Store {
       newsletters: {
         marks: raw.newsletters?.marks && typeof raw.newsletters.marks === 'object' ? raw.newsletters.marks : {},
         moved: Array.isArray(raw.newsletters?.moved) ? raw.newsletters.moved.filter((x) => typeof x === 'string') : []
-      }
+      },
+      unsubscribed: Object.fromEntries(
+        Object.entries(raw.unsubscribed && typeof raw.unsubscribed === 'object' ? raw.unsubscribed : {}).filter(
+          (e): e is [string, string] => typeof e[1] === 'string'
+        )
+      )
     }
   }
 
@@ -305,6 +313,21 @@ export class Store {
   setNewsletterMark(accountId: string, mark: NewsletterMark | null): void {
     if (mark) this.data.newsletters.marks[accountId] = mark
     else delete this.data.newsletters.marks[accountId]
+    this.save()
+  }
+
+  // ---------- Unsubscribe audit ----------
+
+  unsubscribed(): Record<string, string> {
+    return this.data.unsubscribed
+  }
+
+  /** Remembers a list WinMail unsubscribed from; the newest 500 are kept. */
+  addUnsubscribed(key: string, at: string): void {
+    const next = Object.entries({ ...this.data.unsubscribed, [key]: at })
+      .sort((a, b) => b[1].localeCompare(a[1]))
+      .slice(0, 500)
+    this.data.unsubscribed = Object.fromEntries(next)
     this.save()
   }
 

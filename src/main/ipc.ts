@@ -24,6 +24,7 @@ import type { Outbox } from './outbox'
 import type { WaitingFor } from './waiting'
 import type { Deliveries } from './delivery'
 import type { Newsletters } from './newsletters'
+import { oneClick, type Unsubscriber } from './unsubscribe'
 import { askSearch, briefParagraph, runAi } from './ai'
 import { AttachmentGrants, TEMP_ROOT, saveTempFile } from './attachments'
 
@@ -72,7 +73,8 @@ export function registerIpc(
   cache: MailCache,
   waiting: WaitingFor,
   deliveries: Deliveries,
-  newsletters: Newsletters
+  newsletters: Newsletters,
+  unsubscriber: Unsubscriber
 ): void {
   const attachments = new AttachmentGrants([store.outboxDir, TEMP_ROOT])
 
@@ -181,14 +183,11 @@ export function registerIpc(
     return file
   })
   handle('file:print', (html: string) => printHtml(html))
-  handle('mail:unsubscribe', async (url: string) => {
-    if (!/^https:\/\//i.test(url)) throw new Error('Only secure unsubscribe links are supported.')
-    const res = await net.fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: 'List-Unsubscribe=One-Click'
-    })
-    if (!res.ok) throw new Error(`The sender's server answered ${res.status}. Try the link in the message instead.`)
+  handle('mail:unsubscribe', (url: string) => oneClick(url))
+  handle('audit:scan', () => unsubscriber.scan())
+  handle('audit:unsubscribe', (keys: string[], opts: { moveToBin: boolean }) => {
+    if (!Array.isArray(keys) || keys.some((k) => typeof k !== 'string')) throw new Error('Pick the lists to leave.')
+    return unsubscriber.unsubscribe(keys, { moveToBin: opts?.moveToBin === true })
   })
 
   handle('compose:pickAttachments', async () => {

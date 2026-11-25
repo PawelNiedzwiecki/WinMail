@@ -25,6 +25,7 @@ import type {
   LabelColour,
   LabelInfo,
   LabelSupport,
+  ListMessage,
   MailChangedEvent,
   MailQuery,
   MailProgressEvent,
@@ -45,6 +46,7 @@ import { isAutomatic } from '../shared/waiting'
 import { isHeld, type Holdable, type HoldRule } from '../shared/delivery'
 import { OWN_ID_PREFIX } from '../shared/brief'
 import { NEWSLETTER_FOLDER, looksLikeNewsletter } from '../shared/newsletters'
+import { listIdOf, parseUnsubscribe as parseListUnsubscribe } from '../shared/unsubscribe'
 import type { FlagRow, FolderState, FolderStatus, MailCache, SnapState } from './cache'
 import type { AccountLabelStore, Snoozed, Store } from './store'
 import {
@@ -323,14 +325,13 @@ function parseUnsubscribe(lines: HeaderLines): Unsubscribe | null {
       .find((l) => l.key === key)
       ?.line.replace(/^[^:]*:\s*/, '')
       .replace(/\r?\n\s+/g, ' ')
-  const header = value('list-unsubscribe')
-  if (!header) return null
-  const links = (header.match(/<([^>]+)>/g) ?? []).map((l) => l.slice(1, -1).trim())
-  const url = links.find((l) => /^https:\/\//i.test(l))
-  const mailto = links.find((l) => /^mailto:/i.test(l))
-  if (!url && !mailto) return null
-  return { url, mailto, oneClick: !!url && /List-Unsubscribe=One-Click/i.test(value('list-unsubscribe-post') ?? '') }
+  return parseListUnsubscribe(value('list-unsubscribe'), value('list-unsubscribe-post'))
 }
+
+/** Headers the Unsubscribe audit reads. */
+const LIST_HEADERS = ['list-unsubscribe', 'list-unsubscribe-post', 'list-id']
+/** The audit looks at this many of the newest messages per folder, at most. */
+const AUDIT_MAX_PER_FOLDER = 5000
 
 /** Builds a message; `keepBcc` for copies that stay with you (Sent, Drafts), never for sending. */
 async function compile(mail: Mail.Options, keepBcc: boolean): Promise<Buffer> {
@@ -2069,6 +2070,52 @@ export class MailService {
     await this.moveTo(accountId, path, uids, inbox, uidValidity)
     this.emit({ accountId, path })
     this.emit({ accountId, path: inbox })
+  }
+
+  // ---------- Unsubscribe audit ----------
+
+  /**
+   * Mail with a List-Unsubscribe header that arrived since `since`, from the Inbox, Newsletters and Archive (on Gmail,
+   * All Mail, which holds them all). Headers and flags only; the newest 5,000 messages of each folder at most.
+   */
+  async listMail(accountId: string, since: Date): Promise<ListMessage[]> {
+    const folders = this.isGmail(accountId)
+      ? [await this.specialPath(accountId, 'all')]
+      : [this.inboxOf(accountId), await this.specialPath(accountId, 'newsletters'), await this.specialPath(accountId, 'archive')]
+    const out: ListMessage[] = []
+    for (const path of [...new Set(folders.filter((p): p is string => !!p))]) {
+      await this.withMailbox(accountId, path, async (c) => {
+        const mb = c.mailbox
+        if (!mb || !mb.exists) return
+        const uids = ((await c.search({ since }, { uid: true })) || []).sort((a, b) => b - a).slice(0, AUDIT_MAX_PER_FOLDER)
+        for (let i = 0; i < uids.length; i += 500) {
+          const rows = await c.fetchAll(
+            uids.slice(i, i + 500).join(','),
+            { uid: true, envelope: true, flags: true, internalDate: true, headers: LIST_HEADERS },
+            { uid: true }
+          )
+          for (const r of rows) {
+            const hdr = r.headers?.toString() ?? ''
+            const unsubscribeHeader = headerValue(hdr, 'list-unsubscribe')
+            if (!unsubscribeHeader) continue
+            const date = r.internalDate ?? r.envelope?.date
+            out.push({
+              accountId,
+              mailbox: path,
+              uid: r.uid,
+              uidValidity: String(mb.uidValidity),
+              from: toAddresses(r.envelope?.from)[0] ?? { name: '', email: '' },
+              listId: listIdOf(headerValue(hdr, 'list-id')),
+              date: (date ? new Date(date) : new Date()).toISOString(),
+              seen: r.flags?.has('\\Seen') ?? false,
+              messageId: r.envelope?.messageId || undefined,
+              unsubscribe: parseListUnsubscribe(unsubscribeHeader, headerValue(hdr, 'list-unsubscribe-post'))
+            })
+          }
+        }
+      })
+    }
+    return out
   }
 
   // ---------- Contacts ----------
