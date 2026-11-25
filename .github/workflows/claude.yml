@@ -30,11 +30,26 @@ jobs:
         with:
           fetch-depth: 1
 
+      # Workaround for anthropics/claude-code-action#2047 (tracked in #90). The action sets CLAUDE_CODE_ENTRYPOINT and
+      # CLAUDE_CODE_ACTION for the CLI, and with them set the API refuses the credential: every run ends with is_error
+      # and no model call. This runs the CLI through a wrapper that clears both. Remove once #2047 is fixed.
+      - name: Install Claude Code without the action markers
+        run: |
+          curl -fsSL https://claude.ai/install.sh | bash
+          cat > "$RUNNER_TEMP/claude" <<EOF
+          #!/bin/sh
+          unset CLAUDE_CODE_ENTRYPOINT CLAUDE_CODE_ACTION
+          exec "$HOME/.local/bin/claude" "\$@"
+          EOF
+          chmod +x "$RUNNER_TEMP/claude"
+          "$RUNNER_TEMP/claude" --version
+
       - name: Run Claude Code
         id: claude
         uses: anthropics/claude-code-action@v1
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          path_to_claude_code_executable: ${{ runner.temp }}/claude
 
           # This is an optional setting that allows Claude to read CI results on PRs
           additional_permissions: |
