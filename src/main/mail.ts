@@ -60,6 +60,7 @@ import {
   keywordName
 } from './labels'
 import { decodeCharset, decodeTransfer, htmlToText, makePreview } from './text'
+import { headerValue, isReplyHeaders, messageIds, parentIds } from './headers'
 import { imapNeedsCheck, keepImap, toGmailQuery, toImapSearch } from './query'
 import { GoogleTokens, REAUTH_MESSAGE, signIn as googleSignIn } from './google'
 import { TEMP_ROOT } from './attachments'
@@ -273,17 +274,6 @@ function parsedAddresses(a: AddressObject | AddressObject[] | undefined): Addres
   )
 }
 
-/** Message-IDs in a References or In-Reply-To header. */
-function messageIds(header: string | undefined): string[] {
-  return header?.match(/<[^<>\s]+>/g) ?? []
-}
-
-/** A header's value from raw header lines, folded lines joined; null when it is missing. */
-function headerValue(raw: string, name: string): string | null {
-  const m = new RegExp(`^${name}:[ \\t]*(.*(?:\\r?\\n[ \\t].*)*)`, 'im').exec(raw)
-  return m ? m[1]!.replace(/\r?\n[ \t]+/g, ' ').trim() : null
-}
-
 /** Headers fetched with every message summary. */
 const SUMMARY_HEADERS = ['references', 'list-id', 'list-unsubscribe', 'list-post', 'precedence', 'auto-submitted', 'x-autoreply', 'x-autorespond']
 
@@ -297,11 +287,6 @@ function newsletterFrom(hdr: string, from: string, subject: string, isReply: boo
     isReply,
     automated: /^auto-submitted:\s*(?!no\b)\S/im.test(hdr)
   })
-}
-
-/** In-Reply-To or References name another message. (List-Id and List-Unsubscribe also hold `<…>`, so not all headers.) */
-function isReplyHeaders(hdr: string, inReplyTo: string | undefined): boolean {
-  return messageIds(headerValue(hdr, 'references') ?? undefined).length > 0 || messageIds(inReplyTo).length > 0
 }
 
 /** An Inbox message as Newsletter magazine sees it: enough to decide, without downloading a preview. */
@@ -1267,10 +1252,9 @@ export class MailService {
         const env = r.envelope
         const date = env?.date ?? r.internalDate ?? new Date()
         const hdr = r.headers?.toString() ?? ''
-        const refs = messageIds(hdr)
         const from = toAddresses(env?.from)[0] ?? { name: '(Unknown)', email: '' }
         const subject = env?.subject || '(No Subject)'
-        const parents = [...new Set([...refs, ...messageIds(env?.inReplyTo)])]
+        const parents = parentIds(hdr, env?.inReplyTo)
         const autoSubmitted = /^auto-submitted:\s*(?!no\b)\S/im.test(hdr) || /^x-auto(reply|respond):/im.test(hdr)
         facts?.set(r.uid, {
           hasInvite: hasInvite(r.bodyStructure),
