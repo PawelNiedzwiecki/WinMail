@@ -208,6 +208,65 @@ export interface Unsubscribe {
   oneClick: boolean
 }
 
+/** How a mailing list can be left: in the background (one-click POST or an email), or only on its web page. */
+export type UnsubscribeWay = 'one-click' | 'email' | 'web'
+
+/** One message with a List-Unsubscribe header, as the Unsubscribe audit reads it (headers and flags only). */
+export interface ListMessage {
+  accountId: string
+  mailbox: string
+  uid: number
+  uidValidity?: string
+  from: Address
+  /** List-Id's identifier (the part in angle brackets, lower case), if any. */
+  listId?: string
+  /** ISO. */
+  date: string
+  seen: boolean
+  messageId?: string
+  unsubscribe: Unsubscribe | null
+}
+
+/** A mailing list in the Unsubscribe audit. */
+export interface MailingList {
+  /** List-Id, else the sender's address, lower case. */
+  key: string
+  name: string
+  address: string
+  total: number
+  opened: number
+  /** ISO time of the newest message. */
+  lastAt: string
+  /** Accounts that get it. */
+  accountIds: string[]
+  /** The newest way out offered, and the account it came to (the one an unsubscribe email is sent from). */
+  unsubscribe: Unsubscribe | null
+  way: UnsubscribeWay | null
+  accountId: string
+  /** When WinMail unsubscribed from it, if it did. */
+  unsubscribedAt?: string
+  /** Unsubscribed, yet mail came more than 7 days after. */
+  stillSending?: boolean
+}
+
+export interface AuditResult {
+  lists: MailingList[]
+  /** How far back it looked, in days. */
+  days: number
+  /** Accounts that could not be looked through, with the reason. */
+  errors: { accountId: string; error: string }[]
+}
+
+export interface UnsubscribeResult {
+  key: string
+  ok: boolean
+  /** One-click and email unsubscribes are done; a web-page one only says to open it. */
+  way: UnsubscribeWay | null
+  error?: string
+  /** Messages moved to the Bin, when asked. */
+  moved?: number
+}
+
 /** Colours a label can have; drawn from a palette that works in light and dark. */
 export type LabelColour = 'red' | 'orange' | 'yellow' | 'green' | 'teal' | 'blue' | 'purple' | 'pink' | 'grey'
 
@@ -713,6 +772,14 @@ export interface WinMailApi {
   setNewsletterRule(sender: Address, rule: 'always' | 'never' | null, message?: MessageRef): Promise<void>
   /** Newsletters were moved, or the feature or its rules changed. */
   onNewslettersChanged(cb: () => void): () => void
+
+  /** Unsubscribe audit: the mailing lists of the last 90 days, least opened first. Asks every enabled account's server. */
+  scanMailingLists(): Promise<AuditResult>
+  /**
+   * Leaves the lists (keys from the last scan): one-click POST or an email sent from the account that gets the list.
+   * Web-page-only lists are not done (the window opens their page). With `moveToBin`, their scanned messages go too.
+   */
+  unsubscribeLists(keys: string[], opts: { moveToBin: boolean }): Promise<UnsubscribeResult[]>
 
   /** Whether a Claude API key is saved. */
   aiAvailable(): Promise<boolean>

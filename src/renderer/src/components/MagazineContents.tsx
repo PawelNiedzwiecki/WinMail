@@ -1,4 +1,4 @@
-import { ChevronLeft, ChevronRight } from 'lucide-react'
+import { ChevronLeft, ChevronRight, MailMinus } from 'lucide-react'
 import { useEffect, useRef } from 'react'
 import type { MessageSummary } from '@shared/types'
 import { arrivedOf, issueTitle, type IssueGroup } from '@shared/newsletters'
@@ -22,6 +22,8 @@ interface Props {
   onSelect: (key: string, mods?: { toggle: boolean; range: boolean }) => void
   onOpen?: (key: string) => void
   onContextMenu?: (key: string, x: number, y: number) => void
+  /** Opens the Unsubscribe audit. */
+  onAudit?: () => void
 }
 
 /** Colours for a sender's mark, picked by its address so each newsletter keeps its own. */
@@ -71,6 +73,11 @@ export function MagazineContents(p: Props) {
           </span>
         </div>
         <div className="mag-nav">
+          {p.onAudit && (
+            <button className="mag-nav-btn" aria-label="Unsubscribe audit" title="Unsubscribe audit: the lists you never read" onClick={p.onAudit}>
+              <MailMinus size={15} />
+            </button>
+          )}
           <button
             className="mag-nav-btn"
             aria-label="Older issue"
