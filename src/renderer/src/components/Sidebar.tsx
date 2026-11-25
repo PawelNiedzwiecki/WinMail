@@ -15,15 +15,20 @@ import {
   TriangleAlert,
   Clock,
   Hourglass,
+  Newspaper,
   type LucideIcon
 } from 'lucide-react'
 import { useState, type ReactNode } from 'react'
 import type { Account, AccountLabels, LabelColour, MailboxInfo, SpecialUse } from '@shared/types'
 import { Collapse } from './Collapse'
 
-/** What the list shows: every inbox, one folder, or (keyword accounts) every message with a label. */
+/**
+ * What the list shows: every inbox, one folder, (keyword accounts) every message with a label, or the Magazine (every
+ * account's Newsletters folder, as issues).
+ */
 export type Selection =
   | { kind: 'all-inboxes' }
+  | { kind: 'magazine' }
   | { kind: 'mailbox'; accountId: string; path: string }
   | { kind: 'label'; accountId: string; id: string }
 
@@ -36,7 +41,8 @@ const ICONS: Record<SpecialUse, LucideIcon> = {
   archive: Archive,
   all: Mails,
   flagged: Flag,
-  snoozed: AlarmClock
+  snoozed: AlarmClock,
+  newsletters: Newspaper
 }
 
 /** Mailboxes where an unread count is useful. */
@@ -58,6 +64,8 @@ interface Props {
   /** Those nobody answered in time; the entry's count. */
   nudgedCount: number
   onOpenWaiting: () => void
+  /** Newsletter magazine is on: the Magazine entry shows (no count; it is read for interest). */
+  magazine: boolean
   /** Right-click on a mailbox. */
   onMailboxMenu: (accountId: string, path: string, x: number, y: number) => void
   /** accountId -> labels: Gmail label folders get their colour, keyword accounts a Labels list. */
@@ -141,6 +149,15 @@ export function Sidebar(p: Props) {
                   />
                 )
               })}
+            </Collapse>
+            <Collapse open={p.magazine}>
+              <Item
+                icon={Newspaper}
+                label="Magazine"
+                title="Newsletters, one issue at a time"
+                selected={p.selection.kind === 'magazine'}
+                onClick={() => p.onSelect({ kind: 'magazine' })}
+              />
             </Collapse>
             <Collapse open={p.scheduledCount > 0}>
               <Item icon={Clock} label="Scheduled" count={p.scheduledCount} selected={false} onClick={p.onOpenScheduled} />

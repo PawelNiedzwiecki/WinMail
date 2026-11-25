@@ -2,6 +2,8 @@ import { app, BrowserWindow, dialog, ipcMain, nativeTheme, net, shell } from 'el
 import { writeFile } from 'fs/promises'
 import type {
   AccountInput,
+  Address,
+  MessageRef,
   AccountUpdate,
   AiInput,
   InviteAnswer,
@@ -21,6 +23,7 @@ import type { Contacts } from './contacts'
 import type { Outbox } from './outbox'
 import type { WaitingFor } from './waiting'
 import type { Deliveries } from './delivery'
+import type { Newsletters } from './newsletters'
 import { askSearch, briefParagraph, runAi } from './ai'
 import { AttachmentGrants, TEMP_ROOT, saveTempFile } from './attachments'
 
@@ -68,7 +71,8 @@ export function registerIpc(
   outbox: Outbox,
   cache: MailCache,
   waiting: WaitingFor,
-  deliveries: Deliveries
+  deliveries: Deliveries,
+  newsletters: Newsletters
 ): void {
   const attachments = new AttachmentGrants([store.outboxDir, TEMP_ROOT])
 
@@ -113,6 +117,7 @@ export function registerIpc(
     const saved = store.setSettings(s)
     nativeTheme.themeSource = saved.appearance
     deliveries.settingsChanged(before, saved)
+    newsletters.settingsChanged(before, saved)
     return saved
   })
 
@@ -241,6 +246,14 @@ export function registerIpc(
     const record = deliveries.records().find((r) => r.id === id)
     if (!record) throw new Error('That delivery is no longer kept.')
     return briefParagraph(store, record)
+  })
+
+  handle('newsletters:count', () => newsletters.countInbox())
+  handle('newsletters:moveInbox', () => newsletters.moveInbox())
+  handle('newsletters:rule', (sender: Address, rule: 'always' | 'never' | null, message?: MessageRef) => {
+    if (!sender || typeof sender.email !== 'string' || !sender.email.includes('@')) throw new Error('That sender has no address.')
+    if (rule !== 'always' && rule !== 'never' && rule !== null) throw new Error('Unknown rule.')
+    return newsletters.setRule({ name: String(sender.name ?? ''), email: sender.email }, rule, message)
   })
 
   handle('ai:available', () => store.hasAiKey())
