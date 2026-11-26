@@ -1,6 +1,7 @@
 // Browser-only stand-in for the Electron bridge, used for UI development.
 import { assertOptedIn } from '@shared/contentFeatures'
 import { nudgeTime } from '@shared/waiting'
+import { checkClient, parseClientSecretJson, type GoogleClientInfo } from '@shared/googleClient'
 import { makeBrief } from '@shared/brief'
 import { advance, formatTime, isHeld, nextDeliveryAt, sameDay, vipAddresses, type HoldRule } from '@shared/delivery'
 import { NEWSLETTER_FOLDER, isNewsletter, ruleMap, withRule, type NewsletterRule } from '@shared/newsletters'
@@ -54,6 +55,10 @@ export function createMockApi(): WinMailApi {
   let settings: Settings = { ...DEFAULT_SETTINGS }
   /** `?ai`: a Claude key is already saved, so AI search and summaries show. */
   let aiKey: string | null = params.has('ai') ? 'mock-key' : null
+  // `?nogoogle` acts like a build with no Google client built in.
+  let googleClient: GoogleClientInfo = params.has('nogoogle')
+    ? { source: 'none', clientId: null }
+    : { source: 'bundled', clientId: '123456789012-mockclient.apps.googleusercontent.com' }
   let scheduled: (ScheduledInfo & { input: SendInput })[] = []
   const scheduledListeners = new Set<() => void>()
   const scheduledChanged = () => scheduledListeners.forEach((cb) => cb())
@@ -605,7 +610,7 @@ ${items.map((t) => `<h3 style="font:600 16px system-ui,sans-serif;margin:18px 0 
       }
       accounts.push(a)
       boxes[a.id] = [{ path: 'INBOX', name: 'Inbox', specialUse: 'inbox', unseen: 0, depth: 0 }]
-      return a
+      return { account: a, renewed: false }
     },
     async reauthGoogleAccount(id) {
       await sleep(1500)
@@ -613,6 +618,21 @@ ${items.map((t) => `<h3 style="font:600 16px system-ui,sans-serif;margin:18px 0 
       return accounts.find((a) => a.id === id)!
     },
     async cancelGoogleSignIn() {},
+    async getGoogleClient() {
+      return googleClient
+    },
+    async setGoogleClient(input) {
+      const parsed = 'json' in input ? parseClientSecretJson(input.json) : checkClient(input.clientId, input.clientSecret)
+      if (!parsed.ok) throw new Error(parsed.error)
+      googleClient = { source: 'custom', clientId: parsed.client.clientId }
+      return googleClient
+    },
+    async clearGoogleClient() {
+      googleClient = params.has('nogoogle')
+        ? { source: 'none', clientId: null }
+        : { source: 'bundled', clientId: '123456789012-mockclient.apps.googleusercontent.com' }
+      return googleClient
+    },
     async getSettings() {
       return settings
     },

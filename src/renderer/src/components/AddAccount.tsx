@@ -1,7 +1,8 @@
 import { motion } from 'motion/react'
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { providers, getProvider } from '@shared/providers'
-import type { Account, AccountInput, ProviderId, ServerConfig } from '@shared/types'
+import type { Account, AccountInput, AddGoogleResult, ProviderId, ServerConfig } from '@shared/types'
+import type { GoogleClientInfo } from '@shared/googleClient'
 import { api } from '../api'
 import { Backdrop, panelExit, useModalEscape } from './Backdrop'
 import { Row, ServerFields, guessServers } from './forms'
@@ -9,13 +10,26 @@ import { ProviderLogo } from './ProviderLogo'
 
 interface Props {
   existing: Account[]
+  /** Start on this provider's sign-in; Google starts signing in at once. */
+  initialProvider?: ProviderId
   onClose: () => void
+  /** A password account was saved; the sheet is done. */
   onAdded: (a: Account) => void
+  /** A Google account was added or renewed; the sheet stays open so another can follow. */
+  onGoogleDone: (a: Account) => void
+  /** Closes the sheet and opens Settings > Accounts, where a Google client can be set up. */
+  onSetUpGoogle: () => void
 }
 
-export function AddAccount({ existing, onClose, onAdded }: Props) {
-  const [step, setStep] = useState<'provider' | 'details'>('provider')
-  const [providerId, setProviderId] = useState<ProviderId>('icloud')
+/** Google first: it is the one most people add. */
+const ordered = [...providers].sort((a, b) => Number(b.id === 'gmail') - Number(a.id === 'gmail'))
+
+export function AddAccount({ existing, initialProvider, onClose, onAdded, onGoogleDone, onSetUpGoogle }: Props) {
+  const [step, setStep] = useState<'provider' | 'details' | 'done'>(initialProvider ? 'details' : 'provider')
+  const [providerId, setProviderId] = useState<ProviderId>(initialProvider ?? 'gmail')
+  const [googleClient, setGoogleClient] = useState<GoogleClientInfo | null>(null)
+  const [googleResult, setGoogleResult] = useState<AddGoogleResult | null>(null)
+  const autoStarted = useRef(false)
   const provider = getProvider(providerId)
 
   const [name, setName] = useState('')
@@ -42,13 +56,38 @@ export function AddAccount({ existing, onClose, onAdded }: Props) {
     setBusy(true)
     setError(null)
     try {
-      const account = await api.addGoogleAccount()
-      if (!cancelled.current) onAdded(account)
+      const result = await api.addGoogleAccount()
+      if (!cancelled.current) {
+        setGoogleResult(result)
+        setStep('done')
+        onGoogleDone(result.account)
+      }
     } catch (e) {
       if (!cancelled.current) setError(e instanceof Error ? e.message : String(e))
     } finally {
       setBusy(false)
     }
+  }
+
+  // Opened for Google (Welcome's button): look up whether sign-in is set up, then go straight to the browser.
+  useEffect(() => {
+    api.getGoogleClient().then(
+      (info) => {
+        setGoogleClient(info)
+        if (initialProvider === 'gmail' && info.source !== 'none' && !autoStarted.current) {
+          autoStarted.current = true
+          void googleSignIn()
+        }
+      },
+      () => setGoogleClient({ source: 'none', clientId: null })
+    )
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  const addAnother = () => {
+    setGoogleResult(null)
+    setStep('details')
+    void googleSignIn()
   }
 
   const cancelGoogle = () => {
@@ -120,14 +159,14 @@ export function AddAccount({ existing, onClose, onAdded }: Props) {
         aria-label="Add Account"
         onMouseDown={(e) => e.stopPropagation()}
         onKeyDown={(e) => {
-          if (e.key === 'Enter' && step === 'details') (oauth ? googleSignIn : signIn)()
+          if (e.key === 'Enter' && step === 'details') (oauth ? (googleClient?.source === 'none' ? () => {} : googleSignIn) : signIn)()
         }}
       >
         {step === 'provider' ? (
           <>
             <h2 className="sheet-title">Choose a Mail account provider…</h2>
             <div className="provider-list" role="radiogroup">
-              {providers.map((p) => (
+              {ordered.map((p) => (
                 <button
                   key={p.id}
                   type="button"
@@ -154,11 +193,31 @@ export function AddAccount({ existing, onClose, onAdded }: Props) {
               </button>
             </div>
           </>
+        ) : step === 'done' && googleResult ? (
+          <>
+            <h2 className="sheet-title">{googleResult.renewed ? 'Signed in again' : 'Account added'}</h2>
+            <p className="sheet-sub">
+              {googleResult.renewed
+                ? `${googleResult.account.email} was already in WinMail. It now signs in with Google.`
+                : `${googleResult.account.email} is ready. Its mail is loading.`}
+            </p>
+            <div className="sheet-actions">
+              <button className="btn" onClick={addAnother}>
+                Add Another Google Account
+              </button>
+              <span className="tb-spacer" />
+              <button className="btn btn-primary" autoFocus onClick={onClose}>
+                Done
+              </button>
+            </div>
+          </>
         ) : oauth ? (
           <>
             <h2 className="sheet-title">{provider.name} Account</h2>
             <p className="sheet-sub">
-              WinMail opens Google in your browser. Sign in there and allow access to Gmail.
+              {googleClient?.source === 'none'
+                ? 'This copy of WinMail has no Google client yet. Set one up in Settings, or use an app password.'
+                : 'WinMail opens Google in your browser. Pick the account, then allow access to Gmail.'}
             </p>
             <div className="oauth-alt">
               <button
@@ -194,8 +253,12 @@ export function AddAccount({ existing, onClose, onAdded }: Props) {
                     Cancel
                   </button>
                 </>
+              ) : googleClient?.source === 'none' ? (
+                <button className="btn btn-primary" autoFocus onClick={onSetUpGoogle}>
+                  Set Up Google Sign-In…
+                </button>
               ) : (
-                <button className="btn btn-primary" autoFocus onClick={googleSignIn}>
+                <button className="btn btn-primary" autoFocus disabled={!googleClient} onClick={googleSignIn}>
                   Sign in with Google
                 </button>
               )}

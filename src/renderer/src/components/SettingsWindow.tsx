@@ -34,6 +34,7 @@ import { NotificationsPage } from './settings/NotificationsPage'
 import { LabelsPage } from './settings/LabelsPage'
 import { DeliveryPage } from './settings/DeliveryPage'
 import { MagazinePage } from './settings/MagazinePage'
+import { GoogleSignInGroup } from './settings/GoogleSignInGroup'
 
 export type SettingsTab =
   | 'general'
@@ -524,6 +525,7 @@ function AccountsPane({
           ))}
         </div>
       )}
+      <GoogleSignInGroup />
     </div>
   )
 }

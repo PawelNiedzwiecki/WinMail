@@ -45,6 +45,7 @@ import {
   type MessageSummary,
   type MoveResult,
   type MoveTarget,
+  type ProviderId,
   type ScheduledInfo,
   type Settings,
   type Unsubscribe,
@@ -349,7 +350,8 @@ export default function App() {
   const [settingsTab, setSettingsTab] = useState<SettingsTab | null>(null)
   const [sidebarW, setSidebarW, resetSidebarW] = usePaneWidth('winmail.sidebarW', '--sidebar-w', 220, 180, 380)
   const [listW, setListW, resetListW] = usePaneWidth('winmail.listW', '--list-w', 340, 260, 640)
-  const [adding, setAdding] = useState(false)
+  /** The Add Account sheet: closed, or open on the provider chooser (true) or one provider's sign-in. */
+  const [adding, setAdding] = useState<boolean | ProviderId>(false)
   const [menu, setMenu] = useState<{ key: string; x: number; y: number } | null>(null)
   const [boxMenu, setBoxMenu] = useState<{ accountId: string; path: string; x: number; y: number } | null>(null)
 
@@ -2053,7 +2055,7 @@ export default function App() {
           onCompose={newMessage}
         />
         {ready && enabled.length === 0 ? (
-          <Welcome onAddAccount={() => setAdding(true)} />
+          <Welcome onAddAccount={(provider) => setAdding(provider ?? true)} />
         ) : (
           <div className="panes">
             {magazine ? (
@@ -2226,10 +2228,16 @@ export default function App() {
           <AddAccount
             key="add-account"
             existing={accounts}
+            initialProvider={typeof adding === 'string' ? adding : undefined}
             onClose={() => setAdding(false)}
             onAdded={async () => {
               setAdding(false)
               await accountsChanged()
+            }}
+            onGoogleDone={() => void accountsChanged()}
+            onSetUpGoogle={() => {
+              setAdding(false)
+              setSettingsTab('accounts')
             }}
           />
         )}

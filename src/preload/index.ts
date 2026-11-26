@@ -37,6 +37,9 @@ const api: WinMailApi = {
   addGoogleAccount: () => call('accounts:addGoogle'),
   reauthGoogleAccount: (id) => call('accounts:reauthGoogle', id),
   cancelGoogleSignIn: () => call('accounts:cancelGoogle'),
+  getGoogleClient: () => call('google:getClient'),
+  setGoogleClient: (input) => call('google:setClient', input),
+  clearGoogleClient: () => call('google:clearClient'),
 
   getSettings: () => call('settings:get'),
   setSettings: (s) => call('settings:set', s),

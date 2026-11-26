@@ -15,6 +15,7 @@ import { Store } from './store'
 import { MailService } from './mail'
 import { MailCache } from './cache'
 import { registerIpc } from './ipc'
+import { useCustomClientFrom } from './google'
 import { Contacts } from './contacts'
 import { Outbox } from './outbox'
 import { Notifier } from './notifications'
@@ -376,6 +377,7 @@ if (!app.requestSingleInstanceLock()) {
     let store: Store
     try {
       store = new Store()
+      useCustomClientFrom(() => store.getGoogleClient())
     } catch (err) {
       dialog.showErrorBox('WinMail could not start', err instanceof Error ? err.message : String(err))
       app.quit()

@@ -17,7 +17,12 @@ jobs:
           node-version: 22
           cache: yarn
       - run: yarn install --frozen-lockfile
+      # The Google OAuth client built into the installer (repository secrets). Without them the build still works,
+      # and people add their own client in Settings > Accounts > Google sign-in.
       - run: yarn dist:win
+        env:
+          MAIN_VITE_GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
+          MAIN_VITE_GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
       - uses: softprops/action-gh-release@v3
         with:
           generate_release_notes: true

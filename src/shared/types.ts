@@ -1,4 +1,5 @@
 import { NO_OPT_INS, type ContentFeatureId, type ContentOptIns } from './contentFeatures'
+import type { GoogleClientInfo } from './googleClient'
 
 export type Security = 'tls' | 'starttls' | 'none'
 
@@ -23,11 +24,19 @@ export interface Account {
   email: string
   username: string
   auth?: AuthMethod
+  /** OAuth accounts: the Google client that issued the refresh token. Missing on older accounts: the built-in one. */
+  oauthClientId?: string
   enabled: boolean
   /** Plain text added below new messages and above quoted text in replies. */
   signature?: string
   imap: ServerConfig
   smtp: ServerConfig
+}
+
+/** What adding a Google account did: a new account, or an existing one signed in again. */
+export interface AddGoogleResult {
+  account: Account
+  renewed: boolean
 }
 
 export type AccountInput = Omit<Account, 'id'> & { password: string }
@@ -645,11 +654,20 @@ export interface WinMailApi {
   addAccount(input: AccountInput): Promise<Account>
   updateAccount(update: AccountUpdate): Promise<Account>
   removeAccount(id: string): Promise<void>
-  /** Opens Google sign-in in the browser, then verifies and saves the account. */
-  addGoogleAccount(): Promise<Account>
+  /**
+   * Opens Google sign-in in the browser, then verifies and saves the account. If that address is already added, it is
+   * signed in again instead (`renewed`), which also moves a password account to OAuth.
+   */
+  addGoogleAccount(): Promise<AddGoogleResult>
   /** Signs an existing Google account in again; also moves a password account to OAuth. */
   reauthGoogleAccount(id: string): Promise<Account>
   cancelGoogleSignIn(): Promise<void>
+  /** Which Google client sign-in uses: the person's own, the one built in, or none. Never includes the secret. */
+  getGoogleClient(): Promise<GoogleClientInfo>
+  /** Saves the person's own Google client (from a client_secret JSON file's text, or a typed ID and secret). */
+  setGoogleClient(input: { json: string } | { clientId: string; clientSecret: string }): Promise<GoogleClientInfo>
+  /** Removes the person's own client and goes back to the built-in one. */
+  clearGoogleClient(): Promise<GoogleClientInfo>
 
   getSettings(): Promise<Settings>
   setSettings(settings: Settings): Promise<Settings>

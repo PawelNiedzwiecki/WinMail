@@ -18,7 +18,8 @@ import type {
 import type { MailService } from './mail'
 import type { Store } from './store'
 import type { MailCache } from './cache'
-import { cancelSignIn, revoke } from './google'
+import { cancelSignIn, clientInfo, revoke } from './google'
+import { checkClient, parseClientSecretJson } from '../shared/googleClient'
 import type { Contacts } from './contacts'
 import type { Outbox } from './outbox'
 import type { WaitingFor } from './waiting'
@@ -105,13 +106,28 @@ export function registerIpc(
     if (store.listAccounts().find((a) => a.id === id)?.auth === 'oauth') void revoke(store.getPassword(id))
     store.removeAccount(id)
   })
-  handle('accounts:addGoogle', () => mail.addGoogleAccount())
+  handle('accounts:addGoogle', async () => {
+    const res = await mail.addGoogleAccount()
+    if (res.renewed) contacts.rescan(res.account.id)
+    return res
+  })
   handle('accounts:reauthGoogle', async (id: string) => {
     const acc = await mail.reauthGoogleAccount(id)
     contacts.rescan(id) // the new sign-in may allow Google Contacts
     return acc
   })
   handle('accounts:cancelGoogle', () => cancelSignIn())
+  handle('google:getClient', () => clientInfo())
+  handle('google:setClient', (input: { json: string } | { clientId: string; clientSecret: string }) => {
+    const parsed = 'json' in input ? parseClientSecretJson(input.json) : checkClient(input.clientId, input.clientSecret)
+    if (!parsed.ok) throw new Error(parsed.error)
+    store.setGoogleClient(parsed.client)
+    return clientInfo()
+  })
+  handle('google:clearClient', () => {
+    store.setGoogleClient(null)
+    return clientInfo()
+  })
 
   handle('settings:get', () => store.getSettings())
   handle('settings:set', (s: Settings) => {

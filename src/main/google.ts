@@ -2,10 +2,44 @@ import { BrowserWindow, shell } from 'electron'
 import { createHash, randomBytes } from 'crypto'
 import { createServer, type ServerResponse } from 'http'
 import type { AddressInfo } from 'net'
+import type { GoogleClientCredentials, GoogleClientInfo } from '../shared/googleClient'
 
-// Desktop app OAuth client from Google Cloud Console, set in .env.local (see README).
-const CLIENT_ID = import.meta.env.MAIN_VITE_GOOGLE_CLIENT_ID ?? ''
-const CLIENT_SECRET = import.meta.env.MAIN_VITE_GOOGLE_CLIENT_SECRET ?? ''
+// The OAuth client built into this copy of WinMail: set in .env.local for dev builds, by CI for releases (see README).
+const BUNDLED: GoogleClientCredentials = {
+  clientId: import.meta.env.MAIN_VITE_GOOGLE_CLIENT_ID ?? '',
+  clientSecret: import.meta.env.MAIN_VITE_GOOGLE_CLIENT_SECRET ?? ''
+}
+
+/** The person's own client (Settings > Accounts > Google sign-in); read from the store on each use. */
+let customSource: () => GoogleClientCredentials | null = () => null
+
+export function useCustomClientFrom(source: () => GoogleClientCredentials | null): void {
+  customSource = source
+}
+
+/** The client new sign-ins use: the person's own, else the one built in. */
+export function activeClient(): GoogleClientCredentials | null {
+  const custom = customSource()
+  if (custom?.clientId) return custom
+  return BUNDLED.clientId ? BUNDLED : null
+}
+
+export function clientInfo(): GoogleClientInfo {
+  const custom = customSource()
+  if (custom?.clientId) return { source: 'custom', clientId: custom.clientId }
+  if (BUNDLED.clientId) return { source: 'bundled', clientId: BUNDLED.clientId }
+  return { source: 'none', clientId: null }
+}
+
+/**
+ * The client that issued an account's refresh token. Google ties a refresh token to its client, so an account keeps
+ * using its own even after the person switches clients. Accounts from before this was recorded used the built-in one.
+ */
+function clientFor(clientId?: string): GoogleClientCredentials | null {
+  const candidates = [customSource(), BUNDLED].filter((c): c is GoogleClientCredentials => !!c?.clientId)
+  if (!clientId) return BUNDLED.clientId ? BUNDLED : null
+  return candidates.find((c) => c.clientId === clientId) ?? null
+}
 
 const AUTH_URL = 'https://accounts.google.com/o/oauth2/v2/auth'
 const TOKEN_URL = 'https://oauth2.googleapis.com/token'
@@ -28,6 +62,8 @@ const EXPIRY_MARGIN_MS = 60_000
 export const REAUTH_MESSAGE = 'Google sign-in expired or was revoked. Sign in again in Settings > Accounts.'
 
 export interface GoogleSignIn {
+  /** The client the sign-in went through; saved on the account. */
+  clientId: string
   email: string
   name: string
   refreshToken: string
@@ -47,9 +83,9 @@ interface TokenResponse {
 
 const b64url = (b: Buffer) => b.toString('base64url')
 
-async function tokenRequest(params: Record<string, string>): Promise<TokenResponse> {
-  const body = new URLSearchParams({ client_id: CLIENT_ID, ...params })
-  if (CLIENT_SECRET) body.set('client_secret', CLIENT_SECRET)
+async function tokenRequest(client: GoogleClientCredentials, params: Record<string, string>): Promise<TokenResponse> {
+  const body = new URLSearchParams({ client_id: client.clientId, ...params })
+  if (client.clientSecret) body.set('client_secret', client.clientSecret)
   let res: Response
   try {
     res = await fetch(TOKEN_URL, { method: 'POST', body })
@@ -58,7 +94,7 @@ async function tokenRequest(params: Record<string, string>): Promise<TokenRespon
   }
   const data = (await res.json().catch(() => ({}))) as TokenResponse
   if (!res.ok || !data.access_token) {
-    if (data.error === 'invalid_grant') throw new Error(REAUTH_MESSAGE)
+    if (data.error === 'invalid_grant' || data.error === 'invalid_client') throw new Error(REAUTH_MESSAGE)
     throw new Error(`Google sign-in failed: ${data.error_description || data.error || res.status}`)
   }
   return data
@@ -84,8 +120,9 @@ export function cancelSignIn(): void {
  * the flow Google requires for desktop apps.
  */
 export async function signIn(loginHint?: string): Promise<GoogleSignIn> {
-  if (!CLIENT_ID) {
-    throw new Error('Google sign-in is not set up. Add MAIN_VITE_GOOGLE_CLIENT_ID to .env.local and rebuild.')
+  const client = activeClient()
+  if (!client) {
+    throw new Error('Google sign-in is not set up yet. Add your own Google client in Settings > Accounts > Google sign-in.')
   }
   cancelSignIn()
 
@@ -100,16 +137,17 @@ export async function signIn(loginHint?: string): Promise<GoogleSignIn> {
 
   const url = new URL(AUTH_URL)
   url.search = new URLSearchParams({
-    client_id: CLIENT_ID,
+    client_id: client.clientId,
     redirect_uri: redirectUri,
     response_type: 'code',
     scope: SCOPES,
     state,
     code_challenge: b64url(createHash('sha256').update(verifier).digest()),
     code_challenge_method: 'S256',
-    // Offline access with forced consent so Google always returns a refresh token.
+    // Offline access with forced consent so Google always returns a refresh token, and the account picker so a
+    // second account can be added while the browser is signed in to the first.
     access_type: 'offline',
-    prompt: 'consent',
+    prompt: 'consent select_account',
     ...(loginHint ? { login_hint: loginHint } : {})
   }).toString()
 
@@ -147,7 +185,7 @@ export async function signIn(loginHint?: string): Promise<GoogleSignIn> {
     win.focus()
   }
 
-  const t = await tokenRequest({
+  const t = await tokenRequest(client, {
     grant_type: 'authorization_code',
     code,
     code_verifier: verifier,
@@ -167,6 +205,7 @@ export async function signIn(loginHint?: string): Promise<GoogleSignIn> {
   }
   if (!claims.email) throw new Error('Google did not return your email address.')
   return {
+    clientId: client.clientId,
     email: claims.email,
     name: claims.name || claims.email,
     refreshToken: t.refresh_token,
@@ -196,10 +235,12 @@ export class GoogleTokens {
     this.cache.delete(accountId)
   }
 
-  async get(accountId: string, refreshToken: string): Promise<string> {
+  async get(accountId: string, refreshToken: string, clientId?: string): Promise<string> {
     const c = this.cache.get(accountId)
     if (c && c.expiresAt - EXPIRY_MARGIN_MS > Date.now()) return c.token
-    const t = await tokenRequest({ grant_type: 'refresh_token', refresh_token: refreshToken })
+    const client = clientFor(clientId)
+    if (!client) throw new Error(REAUTH_MESSAGE)
+    const t = await tokenRequest(client, { grant_type: 'refresh_token', refresh_token: refreshToken })
     this.remember(accountId, t.access_token!, Date.now() + (t.expires_in ?? 3600) * 1000)
     return t.access_token!
   }
