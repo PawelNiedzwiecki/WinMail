@@ -261,7 +261,21 @@
 }
 .st-key-form {
   display: flex;
+  flex-wrap: wrap;
   gap: 8px;
+}
+.st-key-form + .st-key-form,
+.st-mono + .st-key-form {
+  margin-top: 8px;
+}
+.st-mono {
+  font-family: ui-monospace, 'Cascadia Mono', Consolas, monospace;
+  font-size: 12px;
+  word-break: break-all;
+  margin-bottom: 8px;
+}
+.st-item-control .st-item-desc {
+  margin-top: 8px;
 }
 
 /* ---------- Notifications ---------- */

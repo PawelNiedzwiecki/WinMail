@@ -20,6 +20,7 @@ import {
   type WaitingInfo
 } from '../shared/types'
 import { normaliseOptIns } from '../shared/contentFeatures'
+import type { GoogleClientCredentials } from '../shared/googleClient'
 import { normaliseTimes } from '../shared/delivery'
 
 /** A snoozed message, found again by Message-ID when it is due. */
@@ -58,6 +59,8 @@ export interface AccountLabelStore {
 
 /** Secret slot for the Claude API key, next to the account secrets. */
 const AI_SECRET = 'ai:anthropic'
+/** Secret slot for the person's own Google OAuth client (JSON with the client ID and secret). */
+const GOOGLE_CLIENT_SECRET = 'google:client'
 
 interface StoreFile {
   version: 1
@@ -410,6 +413,25 @@ export class Store {
   setAiKey(key: string | null): void {
     if (key) this.data.secrets[AI_SECRET] = this.encrypt(key)
     else delete this.data.secrets[AI_SECRET]
+    this.save()
+  }
+
+  // ---------- Own Google OAuth client ----------
+
+  getGoogleClient(): GoogleClientCredentials | null {
+    const s = this.data.secrets[GOOGLE_CLIENT_SECRET]
+    if (!s) return null
+    try {
+      const c = JSON.parse(safeStorage.decryptString(Buffer.from(s, 'base64'))) as Partial<GoogleClientCredentials>
+      return c.clientId ? { clientId: c.clientId, clientSecret: c.clientSecret ?? '' } : null
+    } catch {
+      return null
+    }
+  }
+
+  setGoogleClient(client: GoogleClientCredentials | null): void {
+    if (client) this.data.secrets[GOOGLE_CLIENT_SECRET] = this.encrypt(JSON.stringify(client))
+    else delete this.data.secrets[GOOGLE_CLIENT_SECRET]
     this.save()
   }
 }

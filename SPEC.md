@@ -14,13 +14,13 @@ WinMail is an Apple Mail-style desktop email client for Windows.
 
 ```
 src/
-  shared/      types.ts (data types + WinMailApi contract), providers.ts (presets), trackers.ts (Tracker shield: known Tracking services, pixel and link rules, banner wording; pure, tested), waiting.ts (Waiting for: does a message ask something, people or lists, nudge time, out-of-office and bounces; pure, tested), delivery.ts (Batched delivery: Delivery times, the last and next Delivery, which Inbox mail is held; pure, tested), brief.ts (the Brief: which delivered mail needs you and why, the rest grouped, the Morning brief's extras and notification wording, what the Claude paragraph sends; pure, tested), newsletters.ts (Newsletter magazine: which mail is a Newsletter, sender rules, Magazine issues; pure, tested), unsubscribe.ts (Unsubscribe audit: List-Unsubscribe, grouping and ranking lists, mailto links; pure, tested), contentFeatures.ts (Content opt-ins)
+  shared/      types.ts (data types + WinMailApi contract), providers.ts (presets), trackers.ts (Tracker shield: known Tracking services, pixel and link rules, banner wording; pure, tested), waiting.ts (Waiting for: does a message ask something, people or lists, nudge time, out-of-office and bounces; pure, tested), delivery.ts (Batched delivery: Delivery times, the last and next Delivery, which Inbox mail is held; pure, tested), brief.ts (the Brief: which delivered mail needs you and why, the rest grouped, the Morning brief's extras and notification wording, what the Claude paragraph sends; pure, tested), newsletters.ts (Newsletter magazine: which mail is a Newsletter, sender rules, Magazine issues; pure, tested), unsubscribe.ts (Unsubscribe audit: List-Unsubscribe, grouping and ranking lists, mailto links; pure, tested), contentFeatures.ts (Content opt-ins), googleClient.ts (own Google OAuth client: client_secret JSON and ID checks; pure, tested)
   main/        Electron main process
     index.ts       Window creation, single instance, wiring, notifications, timers
     store.ts       winmail.json: accounts, settings, encrypted secrets
     mail.ts        MailService: IMAP connections, mailboxes, messages, search, move, send, drafts, folder sync
     cache.ts       MailCache: SQLite copy of folder lists and opened messages (mail-cache.db)
-    google.ts      Google OAuth (PKCE, loopback), access-token cache, revoke
+    google.ts      Google OAuth (PKCE, loopback), client choice (own or built in), access-token cache, revoke
     contacts.ts    Contact ranking and cache (contacts.json)
     addressbook.ts Google People API and CardDAV address books
     text.ts        Charset/transfer decoding, HTML-to-text, previews
@@ -42,7 +42,7 @@ src/
 ```
 
 - **IMAP connections:** one `ImapFlow` per account, reused; `withMailbox` locks a folder for each operation, then returns to INBOX after 3 s so IDLE keeps watching it.
-- **Tests:** `yarn test` runs Vitest on the pure modules (`src/shared/*.test.ts`: the Tracker shield, Waiting for, Batched delivery and Brief rules) and on `src/main/waiting.test.ts` and `src/main/delivery.test.ts` (WaitingFor and Deliveries with a stubbed store and mail service). The delivery tests set `TZ=Europe/London` so the clock-change days are real ones.
+- **Tests:** `yarn test` runs Vitest on the pure modules (`src/shared/*.test.ts`: the Tracker shield, Waiting for, Batched delivery, Brief and Google client rules) and on `src/main/waiting.test.ts` and `src/main/delivery.test.ts` (WaitingFor and Deliveries with a stubbed store and mail service). The delivery tests set `TZ=Europe/London` so the clock-change days are real ones.
 - **Mock mode:** opening `out/renderer/index.html` in a browser uses `mockApi.ts` (`?empty` for no accounts, `?ai` for a saved Claude key, `?batch` for Batched delivery with three messages held and a Brief for the last Delivery, `?delivery` for a Delivery four seconds after launch, `?morning` with either to make that Brief the Morning brief, `?magazine` for Newsletter magazine on with a week of issues and three Newsletters still in the Inboxes; the Unsubscribe audit always has a dozen made-up lists, one of which refuses). Every new API method must have a mock.
 
 ## 3. Data and storage
@@ -63,7 +63,8 @@ Defined in `src/shared/types.ts` (`WinMailApi`), bridged in `src/preload/index.t
 | --- | --- | --- |
 | listAccounts / addAccount / updateAccount / removeAccount | `accounts:*` | Account CRUD |
 | testAccount | `accounts:test` | Verify IMAP + SMTP credentials |
-| addGoogleAccount / reauthGoogleAccount / cancelGoogleSignIn | `accounts:*Google` | Google sign-in |
+| addGoogleAccount / reauthGoogleAccount / cancelGoogleSignIn | `accounts:*Google` | Google sign-in; `addGoogleAccount` returns `{ account, renewed }` and signs an already-added address in again |
+| getGoogleClient / setGoogleClient / clearGoogleClient | `google:getClient`, `google:setClient`, `google:clearClient` | The person's own OAuth client (client_secret JSON or ID and secret); info never includes the secret |
 | getSettings / setSettings | `settings:*` | App settings |
 | listMailboxes | `mail:mailboxes` | Folder tree with unread counts |
 | cachedMailboxes / cachedList / cacheSize / clearCache | `mail:cachedMailboxes`, `mail:cachedList`, `mail:cacheSize`, `mail:clearCache` | The saved copy on this PC, read without a connection |
@@ -93,7 +94,7 @@ New methods added by roadmap items are listed in the changelog entry that introd
 
 ## 5. Feature spec (current behaviour)
 
-**Accounts.** Added from Welcome, sidebar `+`, or Settings > Accounts. Credentials verified against IMAP and SMTP before saving. Google sign-in opens the browser (PKCE, loopback port). Accounts can be disabled, edited, removed (revokes Google token).
+**Accounts.** Added from Welcome, sidebar `+`, or Settings > Accounts. Credentials verified against IMAP and SMTP before saving. Google sign-in opens the browser (PKCE, loopback port, `prompt=consent select_account` so the account picker always shows); the welcome screen's button starts it at once and the sheet then offers Add Another Google Account. An already-added address is signed in again (also moves a password account to OAuth). The OAuth client is the person's own (Settings > Accounts > Google sign-in, stored encrypted in `secrets` under `google:client`) or the one built into the release; each OAuth account records `oauthClientId` and refreshes through that client (a refresh token only works with the client that issued it; a missing client asks for a new sign-in). Accounts can be disabled, edited, removed (revokes Google token).
 
 **Mailboxes.** Sidebar shows Favourites (unified Inbox + per-account inboxes) and each account's folder tree. Special folders detected via SPECIAL-USE and sorted: Inbox, Drafts, Sent, Junk, Bin, Archive, All Mail, Flagged. Unread counts for Inbox, Junk and custom folders.
 

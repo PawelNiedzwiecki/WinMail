@@ -23,7 +23,7 @@ Add accounts from the welcome screen, the `+` in the sidebar, or Settings (`Ctrl
 | Provider | Password to use |
 | --- | --- |
 | iCloud | App-specific password from account.apple.com |
-| Google | Sign in with Google in your browser (see setup below), or an app password from myaccount.google.com/apppasswords |
+| Google | **Sign in with Google** in your browser, or an app password from myaccount.google.com/apppasswords |
 | Yahoo! | App password from Yahoo Account Security |
 | Fastmail | App password from Settings > Privacy & Security |
 | Other (IMAP) | Your mail password; enter IMAP and SMTP servers |
@@ -31,22 +31,31 @@ Add accounts from the welcome screen, the `+` in the sidebar, or Settings (`Ctrl
 
 Credentials are verified against IMAP and SMTP before saving. Passwords and Google refresh tokens are encrypted with Electron `safeStorage` (Windows DPAPI) and stored in `%APPDATA%\winmail\winmail.json`.
 
-### Google sign-in setup
+### Adding Google accounts
 
-Sign in with Google needs your own OAuth client:
+Click **Sign in with Google** on the welcome screen (or `+` in the sidebar, then Google). WinMail opens Google in your browser, you pick the account and allow access, and it's added. Google always shows its account picker, so you can add several accounts one after another: the confirmation offers **Add Another Google Account**. Signing in to an address that is already added signs that account in again instead of failing.
+
+WinMail receives the answer on `http://127.0.0.1:<random port>` (PKCE), and IMAP and SMTP then log in with XOAUTH2. Passwords and Google refresh tokens are encrypted with Electron `safeStorage` (Windows DPAPI).
+
+Existing app-password Google accounts can switch with **Sign in with Google…** in Settings > Accounts > Server Settings. Removing a Google account revokes its token.
+
+**"Google hasn't verified this app".** WinMail asks for full Gmail access (`https://mail.google.com/`), which Google treats as a restricted scope. Until the app passes Google's verification and security assessment, the installer's Google client shows this warning (click **Advanced**, then **Go to WinMail**) and at most 100 people can sign in through it. For more than that, or to avoid the warning, use your own client (below).
+
+### Using your own Google client
+
+Releases carry a Google client, but you can use your own with no rebuild: **Settings > Accounts > Google sign-in** > **Import client_secret.json…** (or enter the client ID and secret). Accounts keep using the client they signed in through; accounts that used a client you remove need to sign in again.
+
+To make a client:
 
 1. In [Google Cloud Console](https://console.cloud.google.com/), create a project and enable the **Gmail API** and the **People API** (for contacts).
 2. **Google Auth Platform > Branding**: fill in the app name and your email.
-3. **Audience**: choose External. While the app is in Testing, add your Gmail addresses as test users.
+3. **Audience**: choose External. While the app is in Testing, add your Gmail addresses as test users, and Google expires refresh tokens after 7 days (Settings > Accounts > Server Settings > Sign In Again). **In production** avoids that; without verification, 100 users can sign in.
 4. **Data Access**: add the scopes `https://mail.google.com/`, `.../auth/contacts.readonly` and `.../auth/contacts.other.readonly`.
-5. **Clients > Create client**: type **Desktop app**. Copy the client ID and secret.
-6. Copy `.env.example` to `.env.local`, fill in both values, then `yarn dev` or rebuild.
+5. **Clients > Create client**: type **Desktop app**. Download the JSON.
 
-WinMail opens Google in your default browser and receives the answer on `http://127.0.0.1:<random port>` (PKCE). IMAP and SMTP then log in with XOAUTH2.
+### Building a release with a Google client
 
-In Testing mode Google expires refresh tokens after 7 days, so you will have to sign in again weekly (Settings > Accounts > Server Settings > Sign In Again). To avoid that, set the app to **In production** under Audience. Without Google's verification, people see an "unverified app" warning, and at most 100 users can sign in.
-
-Existing app-password Google accounts can switch with **Sign in with Google…** in the same place. Removing a Google account revokes its token.
+For a dev build, copy `.env.example` to `.env.local`, fill in the client ID and secret, then `yarn dev` or rebuild. For GitHub releases, add the repository secrets `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET`; `.github/workflows/release.yml` builds them into the installer. A desktop app's client secret isn't confidential (Google's own guidance for installed apps), and PKCE protects the sign-in. Without these, the build has no Google client and people add their own in Settings.
 
 ## Features
 
