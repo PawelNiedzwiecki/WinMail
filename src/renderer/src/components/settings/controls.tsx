@@ -1,4 +1,5 @@
 import { LayoutGroup, motion } from 'motion/react'
+import type { LucideIcon } from 'lucide-react'
 import { useId, type ReactNode } from 'react'
 import { dur, ease } from '../../motion'
 
@@ -74,9 +75,10 @@ export function Group({ title, children }: { title?: string; children: ReactNode
 }
 
 /** One setting: what it is on the left, how to change it on the right (or underneath, when `stack`). */
-export function Item(p: { title: string; description?: ReactNode; children: ReactNode; stack?: boolean }) {
+export function Item(p: { title: string; description?: ReactNode; children: ReactNode; stack?: boolean; icon?: LucideIcon }) {
   return (
     <div className={`st-item${p.stack ? ' is-stack' : ''}`}>
+      {p.icon && <p.icon className="st-item-icon" size={16} strokeWidth={1.8} aria-hidden />}
       <div className="st-item-text">
         <div className="st-item-title">{p.title}</div>
         {p.description && <div className="st-item-desc">{p.description}</div>}

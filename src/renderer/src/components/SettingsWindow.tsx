@@ -4,22 +4,29 @@ import {
   ChevronLeft,
   ChevronRight,
   Clock,
+  ImageIcon,
+  Inbox,
   Keyboard,
+  MessagesSquare,
+  RefreshCw,
+  HardDrive,
   Monitor,
   Moon,
   Newspaper,
   Palette,
   PenLine,
   Plus,
+  Search,
   SlidersHorizontal,
   Sparkles,
   Sun,
   Tag,
+  Trash2,
   X,
   type LucideIcon
 } from 'lucide-react'
 import { motion } from 'motion/react'
-import { useEffect, useState, type ReactNode } from 'react'
+import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import { Backdrop, panelExit, useModalEscape } from './Backdrop'
 import type { Account, AccountLabels, Appearance, ComposeFormat, ContactsStatus, ListDensity, MessageAppearance, Settings } from '@shared/types'
 import { CONTENT_FEATURES, CONTENT_FEATURE_IDS } from '@shared/contentFeatures'
@@ -63,38 +70,109 @@ interface Props {
   onOpenAudit: () => void
 }
 
-const PAGES: { id: SettingsTab; label: string; icon: LucideIcon }[] = [
-  { id: 'general', label: 'General', icon: SlidersHorizontal },
-  { id: 'appearance', label: 'Appearance', icon: Palette },
-  { id: 'notifications', label: 'Notifications', icon: Bell },
-  { id: 'delivery', label: 'Delivery', icon: Clock },
-  { id: 'magazine', label: 'Magazine', icon: Newspaper },
-  { id: 'composing', label: 'Composing', icon: PenLine },
-  { id: 'labels', label: 'Labels', icon: Tag },
-  { id: 'shortcuts', label: 'Shortcuts', icon: Keyboard },
-  { id: 'ai', label: 'Claude', icon: Sparkles },
-  { id: 'accounts', label: 'Accounts', icon: AtSign }
+interface PageDef {
+  id: SettingsTab
+  label: string
+  icon: LucideIcon
+  /** Colour of the icon tile in the navigation. */
+  tile: string
+  /** Extra words the search matches besides the label. */
+  keywords: string
+}
+
+const PAGE_DEFS: Record<SettingsTab, PageDef> = {
+  general: { id: 'general', label: 'General', icon: SlidersHorizontal, tile: '#6e6e73', keywords: 'check new mail inbox conversation categories delete bin privacy remote images storage cache' },
+  delivery: { id: 'delivery', label: 'Delivery', icon: Clock, tile: '#0a84ff', keywords: 'batched brief vip hold times' },
+  notifications: { id: 'notifications', label: 'Notifications', icon: Bell, tile: '#e5484d', keywords: 'alerts sound quiet hours' },
+  labels: { id: 'labels', label: 'Labels', icon: Tag, tile: '#ef6c1a', keywords: 'tags colours folders' },
+  magazine: { id: 'magazine', label: 'Magazine', icon: Newspaper, tile: '#8e4ec6', keywords: 'newsletters issues unsubscribe' },
+  composing: { id: 'composing', label: 'Composing', icon: PenLine, tile: '#12a594', keywords: 'undo send format signature write' },
+  shortcuts: { id: 'shortcuts', label: 'Shortcuts', icon: Keyboard, tile: '#2f6fea', keywords: 'keys keyboard gmail' },
+  appearance: { id: 'appearance', label: 'Appearance', icon: Palette, tile: '#2f9e57', keywords: 'theme dark light density motion animations' },
+  ai: { id: 'ai', label: 'Claude', icon: Sparkles, tile: '#d6409f', keywords: 'api key anthropic ai summarise' },
+  accounts: { id: 'accounts', label: 'Accounts', icon: AtSign, tile: '#0a84ff', keywords: 'add email servers imap smtp signature' }
+}
+
+const NAV_GROUPS: { title: string; ids: SettingsTab[] }[] = [
+  { title: 'Mail', ids: ['general', 'delivery', 'notifications', 'labels'] },
+  { title: 'Reading and writing', ids: ['magazine', 'composing', 'shortcuts'] },
+  { title: 'App', ids: ['appearance', 'ai'] }
 ]
 
 export function SettingsWindow(p: Props) {
   useModalEscape(p.onClose)
-  const page = PAGES.find((x) => x.id === p.tab) ?? PAGES[0]!
+  const [query, setQuery] = useState('')
+  const page = PAGE_DEFS[p.tab] ?? PAGE_DEFS.general
+  const q = query.trim().toLowerCase()
+  const groups = useMemo(
+    () =>
+      NAV_GROUPS.map((g) => ({
+        title: g.title,
+        items: g.ids.map((id) => PAGE_DEFS[id]).filter((x) => !q || `${x.label} ${x.keywords}`.toLowerCase().includes(q))
+      })).filter((g) => g.items.length > 0),
+    [q]
+  )
+  const showAccounts = !q || `${PAGE_DEFS.accounts.label} ${PAGE_DEFS.accounts.keywords}`.toLowerCase().includes(q)
+  const initials = (p.accounts[0]?.name || p.accounts[0]?.description || '')
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((w) => w[0]!.toUpperCase())
+    .join('')
   return (
     <Backdrop onMouseDown={p.onClose}>
       <motion.div {...panelExit} className="st-window" role="dialog" aria-label="Settings" onMouseDown={(e) => e.stopPropagation()}>
         <nav className="st-nav" aria-label="Settings sections">
-          <div className="st-nav-title">Settings</div>
-          {PAGES.map((x) => (
+          <label className="st-search">
+            <Search size={14} strokeWidth={2} aria-hidden />
+            <input
+              type="search"
+              aria-label="Search settings"
+              placeholder="Search"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Escape' && query) {
+                  e.stopPropagation()
+                  setQuery('')
+                }
+              }}
+            />
+          </label>
+          {showAccounts && (
             <button
-              key={x.id}
-              className={`st-nav-item${x.id === page.id ? ' is-active' : ''}`}
-              aria-current={x.id === page.id ? 'page' : undefined}
-              onClick={() => p.onTab(x.id)}
+              className={`st-profile${page.id === 'accounts' ? ' is-active' : ''}`}
+              aria-current={page.id === 'accounts' ? 'page' : undefined}
+              onClick={() => p.onTab('accounts')}
             >
-              <x.icon size={16} strokeWidth={1.8} />
-              {x.label}
+              <span className="st-avatar" aria-hidden>
+                {initials || <AtSign size={16} strokeWidth={2} />}
+              </span>
+              <span className="st-profile-text">
+                <span className="st-profile-title">Accounts</span>
+                <span className="st-profile-sub">Add and manage mail accounts</span>
+              </span>
             </button>
+          )}
+          {groups.map((g) => (
+            <div key={g.title} className="st-nav-group" role="group" aria-label={g.title}>
+              <div className="st-nav-heading">{g.title}</div>
+              {g.items.map((x) => (
+                <button
+                  key={x.id}
+                  className={`st-nav-item${x.id === page.id ? ' is-active' : ''}`}
+                  aria-current={x.id === page.id ? 'page' : undefined}
+                  onClick={() => p.onTab(x.id)}
+                >
+                  <span className="st-nav-tile" style={{ background: x.tile }}>
+                    <x.icon size={13} strokeWidth={2.2} />
+                  </span>
+                  {x.label}
+                </button>
+              ))}
+            </div>
           ))}
+          {!showAccounts && groups.length === 0 && <div className="st-nav-empty">No settings match “{query.trim()}”.</div>}
         </nav>
         <section className="st-main">
           <header className="st-head">
@@ -138,7 +216,7 @@ function GeneralPage({ settings, onChange }: PageProps) {
   return (
     <>
       <Group title="New mail">
-        <Item title="Check for new messages" description="How often WinMail looks for mail.">
+        <Item icon={RefreshCw} title="Check for new messages" description="How often WinMail looks for mail.">
           <Select
             aria-label="Check for new messages"
             value={String(settings.checkIntervalMin)}
@@ -156,7 +234,7 @@ function GeneralPage({ settings, onChange }: PageProps) {
       </Group>
 
       <Group title="Inbox">
-        <Item title="Group by conversation" description="Show replies together under one entry.">
+        <Item icon={MessagesSquare} title="Group by conversation" description="Show replies together under one entry.">
           <Switch
             label="Group messages by conversation"
             checked={settings.conversations}
@@ -164,6 +242,7 @@ function GeneralPage({ settings, onChange }: PageProps) {
           />
         </Item>
         <Item
+          icon={Inbox}
           title="Inbox categories"
           description="Primary, Social, Promotions and more. Non-Google accounts are sorted by WinMail and may be wrong."
         >
@@ -173,7 +252,7 @@ function GeneralPage({ settings, onChange }: PageProps) {
             onChange={(inboxCategories) => onChange({ ...settings, inboxCategories })}
           />
         </Item>
-        <Item title="Confirm before deleting" description="Ask before moving messages to the Bin.">
+        <Item icon={Trash2} title="Confirm before deleting" description="Ask before moving messages to the Bin.">
           <Switch
             label="Confirm before deleting"
             checked={settings.confirmDelete}
@@ -184,6 +263,7 @@ function GeneralPage({ settings, onChange }: PageProps) {
 
       <Group title="Privacy">
         <Item
+          icon={ImageIcon}
           title="Load remote images"
           description="Senders can see when and where you opened a message. You can still load them per message."
         >
@@ -219,6 +299,7 @@ function StorageGroup() {
   return (
     <Group title="Storage">
       <Item
+        icon={HardDrive}
         title={size === null ? 'Mail saved on this PC' : `Mail saved on this PC: ${formatSize(size)}`}
         description={
           error ??

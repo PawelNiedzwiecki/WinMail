@@ -2,8 +2,8 @@
 
 .st-window {
   display: flex;
-  width: min(880px, 94vw);
-  height: min(620px, 90vh);
+  width: min(920px, 94vw);
+  height: min(680px, 90vh);
   overflow: hidden;
   border-radius: 12px;
   background: var(--surface);
@@ -13,33 +13,111 @@
 
 /* ---------- Navigation ---------- */
 .st-nav {
-  width: 200px;
+  width: 240px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 14px 10px;
+  overflow-y: auto;
+  border-right: 1px solid var(--hairline);
+  background: var(--panel);
+}
+.st-search {
+  flex-shrink: 0;
+  height: 30px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 10px;
+  border-radius: 8px;
+  background: var(--input-bg);
+  color: var(--text-3);
+}
+.st-search input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  outline: 0;
+}
+.st-search input::placeholder {
+  color: var(--text-3);
+}
+.st-search:focus-within {
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 40%, transparent);
+}
+.st-profile {
+  flex-shrink: 0;
+  margin-top: 12px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px;
+  border-radius: 8px;
+  color: var(--text);
+  text-align: left;
+  background: var(--hover);
+  transition: background-color 100ms ease, box-shadow 120ms ease;
+}
+.st-profile:hover,
+.st-profile.is-active {
+  background: var(--sidebar-selected);
+}
+.st-avatar {
+  width: 34px;
+  height: 34px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background: var(--accent);
+  color: var(--accent-text);
+  font-size: 13px;
+  font-weight: 600;
+}
+.st-profile-text {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.st-profile-title {
+  font-weight: 600;
+}
+.st-profile-sub {
+  color: var(--text-2);
+  font-size: 12px;
+}
+.st-nav-group {
   flex-shrink: 0;
   display: flex;
   flex-direction: column;
   gap: 2px;
-  padding: 16px 10px;
-  border-right: 1px solid var(--hairline);
-  background: var(--panel);
 }
-.st-nav-title {
-  padding: 2px 10px 14px;
-  font-size: 15px;
-  font-weight: 700;
+.st-nav-heading {
+  padding: 14px 8px 4px;
+  color: var(--text-3);
+  font-size: 11px;
+  font-weight: 600;
+}
+.st-nav-empty {
+  padding: 16px 8px;
+  color: var(--text-2);
+  font-size: 12px;
 }
 .st-nav-item {
   display: flex;
   align-items: center;
-  gap: 10px;
-  height: 32px;
-  padding: 0 10px;
-  border-radius: 7px;
+  gap: 8px;
+  height: 28px;
+  padding: 0 8px;
+  border-radius: 6px;
   color: var(--text);
   text-align: left;
   transition: background-color 100ms ease, box-shadow 120ms ease;
-}
-.st-nav-item svg {
-  transition: color 100ms ease;
 }
 .st-nav-item:hover {
   background: var(--hover);
@@ -48,13 +126,17 @@
   background: var(--sidebar-selected);
   font-weight: 600;
 }
-.st-nav-item svg {
+.st-nav-tile {
+  width: 20px;
+  height: 20px;
   flex-shrink: 0;
-  color: var(--text-2);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 5px;
+  color: #fff;
 }
-.st-nav-item.is-active svg {
-  color: var(--accent);
-}
+.st-profile:focus-visible,
 .st-nav-item:focus-visible,
 .st-switch:focus-visible,
 .st-seg button:focus-visible {
@@ -142,6 +224,12 @@
   gap: 24px;
   min-height: 52px;
   padding: 12px 16px;
+}
+.st-item-icon {
+  flex-shrink: 0;
+  align-self: flex-start;
+  margin: 1px -12px 0 0;
+  color: var(--text-2);
 }
 .st-item-text {
   flex: 1;
@@ -613,7 +701,7 @@
   .st-knob,
   .st-seg button,
   .st-nav-item,
-  .st-nav-item svg,
+  .st-profile,
   .st-input,
   .st-card .st-keyrow,
   .acct-card,
