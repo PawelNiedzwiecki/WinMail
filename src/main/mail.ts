@@ -16,6 +16,7 @@ import { basename, join } from 'path'
 import type {
   Account,
   AccountInput,
+  AddGoogleResult,
   AccountLabels,
   Address,
   AttachmentInfo,
@@ -62,7 +63,7 @@ import {
 import { decodeCharset, decodeTransfer, htmlToText, makePreview } from './text'
 import { headerValue, isReplyHeaders, messageIds, parentIds } from './headers'
 import { imapNeedsCheck, keepImap, toGmailQuery, toImapSearch } from './query'
-import { GoogleTokens, REAUTH_MESSAGE, signIn as googleSignIn } from './google'
+import { GoogleTokens, REAUTH_MESSAGE, signIn as googleSignIn, type GoogleSignIn } from './google'
 import { TEMP_ROOT } from './attachments'
 import { buildReply, findCalendarPart, isInlineCalendar, parseInvite } from './calendar'
 
@@ -497,7 +498,7 @@ export class MailService {
   private async creds(acc: Account): Promise<Creds> {
     const secret = this.store.getPassword(acc.id)
     if (acc.auth !== 'oauth') return { ...acc, password: secret }
-    return { ...acc, accessToken: await this.tokens.get(acc.id, secret) }
+    return { ...acc, accessToken: await this.tokens.get(acc.id, secret, acc.oauthClientId) }
   }
 
   private async client(accountId: string): Promise<ImapFlow> {
@@ -679,18 +680,17 @@ export class MailService {
     }
   }
 
-  async addGoogleAccount(): Promise<Account> {
+  async addGoogleAccount(): Promise<AddGoogleResult> {
     const g = await googleSignIn()
     const existing = this.store.listAccounts()
-    if (existing.some((a) => a.email.toLowerCase() === g.email.toLowerCase())) {
-      throw new Error(
-        `${g.email} is already added. To switch it to Google sign-in, use Settings > Accounts > Server Settings.`
-      )
-    }
+    const same = existing.find((a) => a.email.toLowerCase() === g.email.toLowerCase())
+    // Already added: sign that account in again (this also moves an app-password account to OAuth).
+    if (same) return { account: await this.renewGoogle(same, g), renewed: true }
     const p = getProvider('gmail')
     const input: AccountInput = {
       provider: 'gmail',
       auth: 'oauth',
+      oauthClientId: g.clientId,
       description: existing.some((a) => a.description === p.name) ? `${p.name} (${g.email})` : p.name,
       name: g.name,
       email: g.email,
@@ -703,7 +703,7 @@ export class MailService {
     await this.testGoogle({ ...input, accessToken: g.accessToken })
     const acc = this.store.addAccount(input)
     this.tokens.remember(acc.id, g.accessToken, g.expiresAt)
-    return acc
+    return { account: acc, renewed: false }
   }
 
   async reauthGoogleAccount(accountId: string): Promise<Account> {
@@ -712,7 +712,11 @@ export class MailService {
     if (g.email.toLowerCase() !== acc.email.toLowerCase()) {
       throw new Error(`You signed in as ${g.email}. Sign in as ${acc.email} instead.`)
     }
-    const next: Account = { ...acc, auth: 'oauth', username: g.email }
+    return this.renewGoogle(acc, g)
+  }
+
+  private async renewGoogle(acc: Account, g: GoogleSignIn): Promise<Account> {
+    const next: Account = { ...acc, auth: 'oauth', username: g.email, oauthClientId: g.clientId }
     await this.testGoogle({ ...next, accessToken: g.accessToken })
     const saved = this.store.updateAccount({ account: next, password: g.refreshToken }, 'oauth')
     await this.disconnect(acc.id)

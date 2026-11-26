@@ -2368,6 +2368,12 @@ textarea {
   color: var(--text-2);
   font-size: 14px;
 }
+.welcome-actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  justify-content: center;
+}
 
 /* ---------- Toasts ---------- */
 /* Bottom left, like Gmail, so they stay clear of the compose cards docked bottom right. */
