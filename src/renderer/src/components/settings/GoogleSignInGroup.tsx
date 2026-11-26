@@ -37,16 +37,18 @@ export function GoogleSignInGroup() {
     }
   }
 
+  if (!info) return null
+
   const status =
-    info?.source === 'custom'
+    info.source === 'custom'
       ? 'Using your own Google client'
-      : info?.source === 'bundled'
+      : info.source === 'bundled'
         ? 'Using the Google client built into WinMail'
         : 'Google sign-in is not set up'
   const description =
-    info?.source === 'none'
+    info.source === 'none'
       ? 'This copy of WinMail has no Google client. Import the file from your own Google Cloud project to turn on Sign in with Google.'
-      : info?.source === 'custom'
+      : info.source === 'custom'
         ? 'Accounts signed in through a client you remove need to sign in again.'
         : 'Most people never need to change this. A Google client of your own has no sign-in limit and no "unverified app" warning for you.'
 

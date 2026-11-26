@@ -94,7 +94,13 @@ async function tokenRequest(client: GoogleClientCredentials, params: Record<stri
   }
   const data = (await res.json().catch(() => ({}))) as TokenResponse
   if (!res.ok || !data.access_token) {
-    if (data.error === 'invalid_grant' || data.error === 'invalid_client') throw new Error(REAUTH_MESSAGE)
+    if (data.error === 'invalid_grant') throw new Error(REAUTH_MESSAGE)
+    if (data.error === 'invalid_client') {
+      // Refreshing: the client that issued the token is gone or changed, so signing in again is the fix.
+      // Signing in: the client ID or secret itself is wrong.
+      if (params.grant_type === 'refresh_token') throw new Error(REAUTH_MESSAGE)
+      throw new Error('Google rejected the client ID or secret. Check them in Settings > Accounts > Google sign-in.')
+    }
     throw new Error(`Google sign-in failed: ${data.error_description || data.error || res.status}`)
   }
   return data
