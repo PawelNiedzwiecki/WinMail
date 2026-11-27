@@ -14,5 +14,6 @@
     "types": ["node"],
     "paths": { "@/*": ["./src/renderer/src/*"], "@shared/*": ["./src/shared/*"] }
   },
-  "include": ["src/**/*", "electron.vite.config.ts"]
+  "include": ["src/**/*", "website/**/*", "electron.vite.config.ts"],
+  "exclude": ["website/dist"]
 }

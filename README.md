@@ -16,6 +16,17 @@ yarn dist:win   # Windows installer into dist/ (run on Windows)
 
 Open `out/renderer/index.html` through a local server in a plain browser to get a mock mode with fake accounts (`?empty` starts with none, `?ai` acts as if a Claude key were saved; Summarise and Suggest a reply still start off until switched on in Settings > Claude; `?batch` turns Batched delivery on with three messages held and a Brief for the last Delivery, `?delivery` also makes a Delivery happen four seconds after launch, `?morning` makes the Brief a Morning brief, `?magazine` turns Newsletter magazine on with a week of issues).
 
+## Website
+
+The landing page lives in `website/`: a small Vite + React page that shares the app's colour tokens, Inter, lucide icons and `motion` curves. It has no build step in common with the Electron app.
+
+```bash
+yarn site:dev       # landing page with hot reload
+yarn site:build     # static files into website/dist/ (relative paths, so any static host works)
+```
+
+Scrolling plays the page's animations: the app window tilts flat as it rises, sections and cards rise in, and the nav frosts over. Messages in the window can be clicked, and a Morning brief arrives a moment after the window comes into view. With reduced motion on in Windows or the browser, movement stops and only fades remain.
+
 ## Accounts
 
 Add accounts from the welcome screen, the `+` in the sidebar, or Settings (`Ctrl+,`) > Accounts.
