@@ -1,6 +1,7 @@
 node_modules/
 out/
 dist/
+website/dist/
 .env.local
 .env.*.local
 *.log

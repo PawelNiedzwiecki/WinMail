@@ -11,7 +11,10 @@
     "preview": "electron-vite preview",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "vitest run",
-    "dist:win": "electron-vite build && electron-builder --win"
+    "dist:win": "electron-vite build && electron-builder --win",
+    "site:dev": "vite --config website/vite.config.mts",
+    "site:build": "vite build --config website/vite.config.mts",
+    "site:preview": "vite preview --config website/vite.config.mts"
   },
   "build": {
     "appId": "com.pawel.winmail",
