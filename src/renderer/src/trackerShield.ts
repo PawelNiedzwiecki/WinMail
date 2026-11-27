@@ -6,6 +6,8 @@ import {
   markedTitle,
   newReport,
   shieldText,
+  splitUrls,
+  webHref,
   type TextPart,
   type TrackerReport
 } from '@shared/trackers'
@@ -19,15 +21,42 @@ export interface Shielded {
   report: TrackerReport
 }
 
+/** Text that is not to become a link: already one, not shown, or inside a control or drawing. */
+const NO_LINKS = 'a, style, script, noscript, template, textarea, button, select, svg'
+
+/** Turns the web addresses an HTML message only wrote as text into links. True when it added any. */
+function linkify(doc: Document): boolean {
+  const walker = doc.createTreeWalker(doc.body, NodeFilter.SHOW_TEXT)
+  const nodes: Text[] = []
+  while (walker.nextNode()) nodes.push(walker.currentNode as Text)
+  let changed = false
+  for (const node of nodes) {
+    const pieces = splitUrls(node.data)
+    if (pieces.length === 1 || node.parentElement?.closest(NO_LINKS)) continue
+    node.replaceWith(
+      ...pieces.map((piece, i) => {
+        if (i % 2 === 0) return piece
+        const a = doc.createElement('a')
+        a.setAttribute('href', webHref(piece))
+        a.textContent = piece
+        return a
+      })
+    )
+    changed = true
+  }
+  return changed
+}
+
 /**
- * Removes the Tracking pixels from an HTML message and cleans its links (see shared/trackers.ts).
+ * Links the addresses written as text, removes the Tracking pixels from an HTML message and cleans its links
+ * (see shared/trackers.ts).
  * Runs on the raw message in an inert document, before sanitising: nothing in it loads or runs. A message the
- * shield finds nothing in comes back as it was written, byte for byte.
+ * there is nothing to change in comes back as it was written, byte for byte.
  */
 export function shieldHtml(html: string): { html: string; report: TrackerReport } {
   const report = newReport()
   const doc = new DOMParser().parseFromString(html, 'text/html')
-  let changed = false
+  let changed = linkify(doc)
 
   doc.querySelectorAll('img[src]').forEach((img) => {
     const src = img.getAttribute('src')!
@@ -44,7 +73,13 @@ export function shieldHtml(html: string): { html: string; report: TrackerReport 
   })
 
   doc.querySelectorAll('a[href]').forEach((a) => {
-    const href = a.getAttribute('href')!.trim()
+    const written = a.getAttribute('href')!.trim()
+    // "www.example.com" as an href would be read as a path inside the message, and go nowhere.
+    const href = webHref(written)
+    if (href !== written) {
+      a.setAttribute('href', href)
+      changed = true
+    }
     const res = cleanLink(href)
     if (res.change === 'none') return
     addLink(report, href, res)

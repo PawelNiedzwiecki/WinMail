@@ -510,18 +510,28 @@ export const markedTitle = (via: string | null) => `Tracked link · goes through
 // Plain text
 // ---------------------------------------------------------------------------------------------------------------
 
-/** Web addresses in plain text, as one capture group so `text.split(URL_RE)` puts them at odd positions. */
-export const URL_RE = /(https?:\/\/[^\s<>()]+[^\s<>().,;:!?'"])/g
+/**
+ * Web addresses in text, with a scheme or starting "www.", as one capture group so `text.split(URL_RE)` puts them
+ * at odd positions. A "www." inside a longer word, an email address or a path is left alone.
+ */
+const URL_RE = /((?:https?:\/\/|(?<![\w@./-])www\.(?=[\w-]+\.[\w-]))[^\s<>()]+[^\s<>().,;:!?'"])/gi
+
+/** The address a link written as `url` opens: one without a scheme gets https. */
+export const webHref = (url: string): string => (/^www\./i.test(url) ? `https://${url}` : url)
+
+/** Text split at its web addresses, which sit at the odd positions. */
+export const splitUrls = (text: string): string[] => text.split(URL_RE)
 
 export type TextPart = { text: string } | { text: string; href: string; change: LinkChange; via: string | null }
 
 /** Plain text split into text and (cleaned) links, with what the shield found. */
 export function shieldText(text: string): { parts: TextPart[]; report: TrackerReport } {
   const report = newReport()
-  const parts = text.split(URL_RE).flatMap((piece, i): TextPart[] => {
+  const parts = splitUrls(text).flatMap((piece, i): TextPart[] => {
     if (i % 2 === 0) return piece ? [{ text: piece }] : []
-    const res = cleanLink(piece)
-    addLink(report, piece, res)
+    const href = webHref(piece)
+    const res = cleanLink(href)
+    addLink(report, href, res)
     return [{ text: res.change === 'none' ? piece : res.href, href: res.href, change: res.change, via: res.via }]
   })
   return { parts, report }

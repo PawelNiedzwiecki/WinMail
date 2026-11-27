@@ -254,6 +254,19 @@ describe('plain text', () => {
     )
   })
 
+  it('links addresses that start "www." and opens them over https', () => {
+    const { parts } = shieldText('See www.example.org/talks, or WWW.Example.org.')
+    expect(parts.filter((p) => 'href' in p)).toMatchObject([
+      { text: 'www.example.org/talks', href: 'https://www.example.org/talks' },
+      { text: 'WWW.Example.org', href: 'https://WWW.Example.org' }
+    ])
+  })
+
+  it('leaves "www." alone inside an email address, a word or on its own', () => {
+    const text = 'bob@www.example.org, awww.that.was, files/www.zip, www. and www.x'
+    expect(shieldText(text).parts).toEqual([{ text }])
+  })
+
   it('reports what it found and describes each link', () => {
     const { parts, report } = shieldText(text)
     expect(report.links.map((l) => l.change)).toEqual(['stripped', 'marked'])
