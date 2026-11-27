@@ -384,6 +384,19 @@ Build order: Tracker shield first, then Waiting for, then Batched delivery, then
 
 Parallel track: **Outlook** (Microsoft OAuth + XOAUTH2) is separate from Tier 4. It doesn't block Tier 4, but it ships before any public release.
 
+### v1.0 — first public release (decided 2026-11-22)
+v1.0 is for anyone who downloads it from GitHub Releases. It ships:
+- Tiers 1–3 with their real-account checks passing (CACHE.md, COMPOSE.md, DELIVERY.md, NOTIFICATIONS.md, TOOLBAR.md).
+- All of Tier 4: Newsletter magazine, Unsubscribe audit, Vault (with Retire an account) and Ask your mailbox, as well as what is already built.
+- One-click sign-in for Google and Outlook: no developer setup, no app passwords.
+- Release plumbing: auto-update, a signed installer.
+
+Distribution: GitHub Releases on this repository only. WinMail gets its own domain, but only for the homepage and privacy policy that Google's verification asks for. Downloads stay on GitHub.
+
+Sign in with Google: one shared WinMail OAuth client, built into release builds and verified by Google for the restricted `https://mail.google.com/` scope. Verification is a v1.0 blocker. Before applying, ask Google whether the Claude features that send mail content (Summarise, Suggest a reply, the Claude paragraph in the Brief, Ask your mailbox) need the annual CASA security assessment. App passwords stay as the fallback. A developer's own client in `.env.local` still overrides the shared one.
+
+Sign in with Microsoft (Outlook): one WinMail app in Microsoft Entra for personal and work/school accounts, as a public client with PKCE and a loopback redirect. Mail is read over IMAP with XOAUTH2, like every other provider. Sending goes through the Microsoft Graph API (`POST /me/sendMail`, scope `Mail.Send`) instead of SMTP, because OAuth SMTP is unreliable on personal Outlook.com accounts. Before building it, a one-day test confirms that IMAP with OAuth works on a personal and a work account. See [ADR 0002](docs/adr/0002-outlook-reads-over-imap-and-sends-through-graph.md).
+
 ### Not planned
 - Confidential mode, Chat/Meet/Spaces: Google services, not mail.
 - Server-side filters UI and vacation responder: need the Gmail API or per-provider Sieve.
